@@ -259,6 +259,37 @@ run gcloud iam service-accounts add-iam-policy-binding "$DEPLOYER_SA_EMAIL" \
   --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${WIF_POOL_NAME}/attribute.repository/${GH_REPO_OWNER}/${GH_REPO_NAME}" \
   --project="$PROJECT_ID" >/dev/null
 
+# ---- Secret Manager secrets (cron + telegram webhook) ---------------------
+# Shared secrets that the service reads from env and that Cloud Scheduler /
+# the Telegram webhook setup call send in headers / paths. Generated once
+# on first run, reused forever afterwards so Scheduler jobs don't break on
+# re-provision.
+CRON_SECRET_NAME="bt-gateway-cron-secret"
+TG_WEBHOOK_SECRET_NAME="bt-gateway-telegram-webhook-secret"
+
+for sec in "$CRON_SECRET_NAME" "$TG_WEBHOOK_SECRET_NAME"; do
+  if ! gcloud secrets describe "$sec" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    run gcloud secrets create "$sec" \
+      --replication-policy="automatic" --project="$PROJECT_ID"
+    # First version: 32 random base64url bytes.
+    val="$(openssl rand -base64 32 | tr -d '\n=+/' | cut -c1-40)"
+    printf '%s' "$val" | \
+      run gcloud secrets versions add "$sec" \
+        --data-file=- --project="$PROJECT_ID"
+  fi
+done
+
+# Runtime SA gets read access on both.
+for sec in "$CRON_SECRET_NAME" "$TG_WEBHOOK_SECRET_NAME"; do
+  run gcloud secrets add-iam-policy-binding "$sec" \
+    --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
+    --role=roles/secretmanager.secretAccessor \
+    --project="$PROJECT_ID" >/dev/null
+done
+
+CRON_SECRET_VALUE="$(gcloud secrets versions access latest \
+  --secret="$CRON_SECRET_NAME" --project="$PROJECT_ID")"
+
 # ---- Cloud Run service (placeholder) --------------------------------------
 # We deploy a stub image first so the service exists and CI can `deploy update`
 # it on every push. Subsequent deploys replace the image with the real build.
@@ -279,6 +310,46 @@ if ! gcloud run services describe "$SERVICE_NAME" \
     --service-account="$RUNTIME_SA_EMAIL" \
     --vpc-connector="$CONNECTOR_NAME" \
     --vpc-egress=all-traffic \
+    --project="$PROJECT_ID"
+fi
+
+# ---- Cloud Scheduler: 45-min session refresh -----------------------------
+# Keeps BT refresh tokens alive. Sends the shared secret in the
+# Authorization header so only our own endpoint accepts it. Recreated each
+# run if the URL or header shape changes — gcloud is idempotent on the name
+# via the update branch.
+SERVICE_URL_FOR_CRON="$(gcloud run services describe "$SERVICE_NAME" \
+  --region="$REGION" --project="$PROJECT_ID" \
+  --format='value(status.url)')"
+CRON_TARGET_URL="${SERVICE_URL_FOR_CRON}/api/internal/cron/refresh"
+CRON_JOB_NAME="bt-gateway-refresh-cron"
+
+# Scheduler needs an App Engine app in the project (historical quirk; a free
+# tier dummy is fine). If it already exists, this is a no-op.
+if ! gcloud app describe --project="$PROJECT_ID" >/dev/null 2>&1; then
+  run gcloud app create --region="$REGION" --project="$PROJECT_ID" || true
+fi
+
+if ! gcloud scheduler jobs describe "$CRON_JOB_NAME" \
+     --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+  run gcloud scheduler jobs create http "$CRON_JOB_NAME" \
+    --schedule="*/45 * * * *" \
+    --time-zone="UTC" \
+    --uri="$CRON_TARGET_URL" \
+    --http-method=POST \
+    --headers="Authorization=Bearer ${CRON_SECRET_VALUE}" \
+    --attempt-deadline=180s \
+    --location="$REGION" \
+    --project="$PROJECT_ID"
+else
+  run gcloud scheduler jobs update http "$CRON_JOB_NAME" \
+    --schedule="*/45 * * * *" \
+    --time-zone="UTC" \
+    --uri="$CRON_TARGET_URL" \
+    --http-method=POST \
+    --update-headers="Authorization=Bearer ${CRON_SECRET_VALUE}" \
+    --attempt-deadline=180s \
+    --location="$REGION" \
     --project="$PROJECT_ID"
 fi
 

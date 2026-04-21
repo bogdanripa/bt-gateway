@@ -94,6 +94,24 @@ export interface TelegramLinkDoc {
   username?: string;
 }
 
+/**
+ * Pending Telegram link code. Stored under
+ * `users/{uid}/integrations/telegram_pending`. The webhook looks it up by
+ * code via a collectionGroup query so it doesn't need to know the uid in
+ * advance — the user's `/start <code>` message resolves to the uid via the
+ * pending doc, then this doc is deleted and the real `telegram` link is
+ * written. Codes live for `PENDING_TELEGRAM_LINK_TTL_MS` after which the
+ * webhook rejects them.
+ */
+export interface PendingTelegramLinkDoc {
+  _type: 'telegram_pending';
+  code: string;
+  uid: string;
+  createdAt: string;
+}
+
+export const PENDING_TELEGRAM_LINK_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
 // ---- client ---------------------------------------------------------------
 
 let dbInstance: Firestore | null = null;
@@ -161,6 +179,10 @@ function eventsCol(t: TenantRef): CollectionReference {
 
 function telegramLinkDoc(t: TenantRef): DocumentReference {
   return userDoc(t).collection('integrations').doc('telegram');
+}
+
+function telegramPendingDoc(t: TenantRef): DocumentReference {
+  return userDoc(t).collection('integrations').doc('telegram_pending');
 }
 
 // ---- high-level read/write -------------------------------------------------
@@ -266,6 +288,44 @@ export async function setTelegramLink(t: TenantRef, link: TelegramLinkDoc): Prom
 
 export async function clearTelegramLink(t: TenantRef): Promise<void> {
   await telegramLinkDoc(t).delete().catch(() => { /* already gone */ });
+}
+
+export async function setPendingTelegramLink(
+  t: TenantRef,
+  code: string,
+): Promise<void> {
+  const doc: PendingTelegramLinkDoc = {
+    _type: 'telegram_pending',
+    code,
+    uid: t.uid,
+    createdAt: new Date().toISOString(),
+  };
+  await telegramPendingDoc(t).set(doc);
+}
+
+export async function clearPendingTelegramLink(t: TenantRef): Promise<void> {
+  await telegramPendingDoc(t).delete().catch(() => { /* already gone */ });
+}
+
+/**
+ * Look up a pending link by code via collectionGroup. Returns the full
+ * doc + its owning uid. Returns null if not found or if the doc is older
+ * than PENDING_TELEGRAM_LINK_TTL_MS (we treat stale codes as absent).
+ */
+export async function findPendingTelegramLink(
+  code: string,
+): Promise<PendingTelegramLinkDoc | null> {
+  const snap = await db()
+    .collectionGroup('integrations')
+    .where('_type', '==', 'telegram_pending')
+    .where('code', '==', code)
+    .limit(1)
+    .get();
+  if (snap.empty) return null;
+  const doc = snap.docs[0].data() as PendingTelegramLinkDoc;
+  const ageMs = Date.now() - new Date(doc.createdAt).getTime();
+  if (ageMs > PENDING_TELEGRAM_LINK_TTL_MS) return null;
+  return doc;
 }
 
 /**
