@@ -180,7 +180,10 @@ Copy the secrets it prints into this GitHub repo's Actions secrets
 | `FIREBASE_PROJECT_ID` | same as `GCP_PROJECT_ID` if shared |
 | `FIREBASE_WEB_API_KEY` | Firebase console → Project settings → Web app |
 | `FIREBASE_WEB_AUTH_DOMAIN` | `<project>.firebaseapp.com` |
-| `TELEGRAM_BOT_TOKEN` | optional; empty disables Telegram alerts |
+
+Telegram is **per-user**, not server-wide — each user creates their own bot
+via @BotFather and registers it in Settings. There is no `TELEGRAM_BOT_TOKEN`
+GitHub secret anymore. See [docs/telegram.md](docs/telegram.md).
 
 Push to main. GitHub Actions builds, pushes, and deploys.
 
@@ -206,6 +209,12 @@ gcloud auth application-default print-access-token | \
     -H 'content-type: application/json' \
     -d '{"localId":"<your-uid>","customAttributes":"{\"isAdmin\":true}"}'
 ```
+
+### Usage from iOS Shortcuts
+
+Want one-tap orders / portfolio checks from your phone? See
+[docs/ios-shortcuts.md](docs/ios-shortcuts.md) — walks through building
+shortcuts around the `/api/v1/orders` and `/api/v1/holdings` endpoints.
 
 ### Usage from a trading script
 

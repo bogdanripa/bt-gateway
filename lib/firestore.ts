@@ -112,6 +112,29 @@ export interface PendingTelegramLinkDoc {
 
 export const PENDING_TELEGRAM_LINK_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
+/**
+ * Per-user Telegram bot. Each tenant brings their own bot (created via
+ * @BotFather) so there's no shared-bot attack surface and alerts come from
+ * a handle the user owns. Stored at `users/{uid}/integrations/bot`.
+ *
+ * `webhookSecret` is a 24-byte random string used as the path segment in
+ * the webhook URL (/api/v1/telegram/webhook/:secret). It doubles as the
+ * lookup key — the webhook resolves sender → uid via a collectionGroup
+ * query on (_type, webhookSecret).
+ */
+export interface TelegramBotDoc {
+  _type: 'telegram_bot';
+  /** Bot @handle without the leading @. Display-only; can be renamed on Telegram. */
+  username: string;
+  /** Envelope-encrypted bot token from @BotFather. */
+  tokenCipher: string;
+  keyVersion: string;
+  /** Random opaque secret that acts as the webhook path segment. */
+  webhookSecret: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ---- client ---------------------------------------------------------------
 
 let dbInstance: Firestore | null = null;
@@ -183,6 +206,10 @@ function telegramLinkDoc(t: TenantRef): DocumentReference {
 
 function telegramPendingDoc(t: TenantRef): DocumentReference {
   return userDoc(t).collection('integrations').doc('telegram_pending');
+}
+
+function telegramBotDoc(t: TenantRef): DocumentReference {
+  return userDoc(t).collection('integrations').doc('bot');
 }
 
 // ---- high-level read/write -------------------------------------------------
@@ -308,6 +335,18 @@ export async function clearPendingTelegramLink(t: TenantRef): Promise<void> {
 }
 
 /**
+ * Fetch the pending link doc for a specific uid. Used by the webhook once
+ * the uid has been resolved from the bot's webhookSecret; avoids a
+ * collectionGroup scan when we already know who we're dealing with.
+ */
+export async function getPendingTelegramLinkForUid(
+  t: TenantRef,
+): Promise<PendingTelegramLinkDoc | null> {
+  const snap = await telegramPendingDoc(t).get();
+  return snap.exists ? (snap.data() as PendingTelegramLinkDoc) : null;
+}
+
+/**
  * Look up a pending link by code via collectionGroup. Returns the full
  * doc + its owning uid. Returns null if not found or if the doc is older
  * than PENDING_TELEGRAM_LINK_TTL_MS (we treat stale codes as absent).
@@ -326,6 +365,43 @@ export async function findPendingTelegramLink(
   const ageMs = Date.now() - new Date(doc.createdAt).getTime();
   if (ageMs > PENDING_TELEGRAM_LINK_TTL_MS) return null;
   return doc;
+}
+
+export async function getTelegramBot(t: TenantRef): Promise<TelegramBotDoc | null> {
+  const snap = await telegramBotDoc(t).get();
+  return snap.exists ? (snap.data() as TelegramBotDoc) : null;
+}
+
+export async function setTelegramBot(t: TenantRef, doc: TelegramBotDoc): Promise<void> {
+  await telegramBotDoc(t).set(doc);
+}
+
+export async function deleteTelegramBot(t: TenantRef): Promise<void> {
+  await telegramBotDoc(t).delete().catch(() => { /* already gone */ });
+}
+
+/**
+ * Resolve an inbound webhook: given the path secret, find the bot doc + its
+ * owning uid. Returns null if no bot has that secret (e.g. the user rotated
+ * the webhook and Telegram hasn't been updated yet). Implementation is a
+ * collectionGroup query scoped by `_type` so we never accidentally match
+ * other integration docs (telegram_pending has its own _type).
+ */
+export async function findTelegramBotByWebhookSecret(
+  webhookSecret: string,
+): Promise<(TelegramBotDoc & { uid: string }) | null> {
+  const snap = await db()
+    .collectionGroup('integrations')
+    .where('_type', '==', 'telegram_bot')
+    .where('webhookSecret', '==', webhookSecret)
+    .limit(1)
+    .get();
+  if (snap.empty) return null;
+  const doc = snap.docs[0].data() as TelegramBotDoc;
+  // Path is users/{uid}/integrations/bot
+  const parts = snap.docs[0].ref.path.split('/');
+  const uid = parts[1];
+  return { ...doc, uid };
 }
 
 /**

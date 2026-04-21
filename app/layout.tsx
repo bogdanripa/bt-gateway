@@ -10,6 +10,13 @@ export const metadata: Metadata = {
   description: 'Multi-tenant BT Trade HTTP gateway',
 };
 
+// IMPORTANT: force per-request rendering. The root layout injects the
+// Firebase Web SDK config from server env into the HTML via <Script>. If
+// the layout were static-rendered at build time, the GitHub Actions build
+// step would bake empty strings (the env vars live on Cloud Run, not in
+// the build image), and no amount of redeploy would refresh them.
+export const dynamic = 'force-dynamic';
+
 export default function RootLayout({ children }: { children: ReactNode }) {
   // Server-side: read Firebase Web SDK config from env and inline it into
   // the page so the client SDK can initialize without a network round-trip.

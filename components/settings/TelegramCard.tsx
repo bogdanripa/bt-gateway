@@ -23,7 +23,7 @@ interface LinkCode {
   deepLink?: string | null;
 }
 
-export function TelegramCard() {
+export function TelegramCard({ botConfigured }: { botConfigured: boolean }) {
   const [status, setStatus] = useState<LinkStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -43,7 +43,10 @@ export function TelegramCard() {
     }
   }
 
-  useEffect(() => { void refresh(); }, []);
+  useEffect(() => {
+    if (botConfigured) void refresh();
+    else setLoading(false);
+  }, [botConfigured]);
 
   async function startLink() {
     setBusy(true);
@@ -74,17 +77,24 @@ export function TelegramCard() {
 
   return (
     <div className="card">
-      <h2>Telegram alerts</h2>
+      <h2>Chat link</h2>
       <p className="dim">
-        Optional. Get a Telegram message when bt-gateway signs in or when a sign-in
-        fails. Routine refreshes every ~45 minutes do <em>not</em> trigger a message.
+        Link your personal Telegram chat so the bot (configured above) can
+        message you when bt-gateway signs in or when a sign-in fails. Routine
+        refreshes every ~45 minutes do <em>not</em> trigger a message.
       </p>
+
+      {!botConfigured && (
+        <div className="notice">
+          Configure your bot above before linking a chat.
+        </div>
+      )}
 
       {err && <div className="notice err">{err}</div>}
 
-      {loading && <p className="dim">Loading…</p>}
+      {botConfigured && loading && <p className="dim">Loading…</p>}
 
-      {!loading && status && !status.linked && !pending && (
+      {botConfigured && !loading && status && !status.linked && !pending && (
         <>
           <p>Not linked.</p>
           <button onClick={() => { void startLink(); }} disabled={busy}>

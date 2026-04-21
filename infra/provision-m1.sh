@@ -259,33 +259,32 @@ run gcloud iam service-accounts add-iam-policy-binding "$DEPLOYER_SA_EMAIL" \
   --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${WIF_POOL_NAME}/attribute.repository/${GH_REPO_OWNER}/${GH_REPO_NAME}" \
   --project="$PROJECT_ID" >/dev/null
 
-# ---- Secret Manager secrets (cron + telegram webhook) ---------------------
-# Shared secrets that the service reads from env and that Cloud Scheduler /
-# the Telegram webhook setup call send in headers / paths. Generated once
-# on first run, reused forever afterwards so Scheduler jobs don't break on
+# ---- Secret Manager secret (cron) -----------------------------------------
+# Shared secret the /api/internal/cron/refresh endpoint expects in the
+# Authorization header — Cloud Scheduler sends it. Generated once on first
+# run, reused forever afterwards so Scheduler jobs don't break on
 # re-provision.
+#
+# (The Telegram webhook secret is per-user and lives in Firestore, not
+# Secret Manager. See app/api/ui/telegram/bot — each tenant mints their
+# own when they add a bot.)
 CRON_SECRET_NAME="bt-gateway-cron-secret"
-TG_WEBHOOK_SECRET_NAME="bt-gateway-telegram-webhook-secret"
 
-for sec in "$CRON_SECRET_NAME" "$TG_WEBHOOK_SECRET_NAME"; do
-  if ! gcloud secrets describe "$sec" --project="$PROJECT_ID" >/dev/null 2>&1; then
-    run gcloud secrets create "$sec" \
-      --replication-policy="automatic" --project="$PROJECT_ID"
-    # First version: 32 random base64url bytes.
-    val="$(openssl rand -base64 32 | tr -d '\n=+/' | cut -c1-40)"
-    printf '%s' "$val" | \
-      run gcloud secrets versions add "$sec" \
-        --data-file=- --project="$PROJECT_ID"
-  fi
-done
+if ! gcloud secrets describe "$CRON_SECRET_NAME" --project="$PROJECT_ID" >/dev/null 2>&1; then
+  run gcloud secrets create "$CRON_SECRET_NAME" \
+    --replication-policy="automatic" --project="$PROJECT_ID"
+  # First version: 32 random base64url bytes.
+  val="$(openssl rand -base64 32 | tr -d '\n=+/' | cut -c1-40)"
+  printf '%s' "$val" | \
+    run gcloud secrets versions add "$CRON_SECRET_NAME" \
+      --data-file=- --project="$PROJECT_ID"
+fi
 
-# Runtime SA gets read access on both.
-for sec in "$CRON_SECRET_NAME" "$TG_WEBHOOK_SECRET_NAME"; do
-  run gcloud secrets add-iam-policy-binding "$sec" \
-    --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
-    --role=roles/secretmanager.secretAccessor \
-    --project="$PROJECT_ID" >/dev/null
-done
+# Runtime SA gets read access.
+run gcloud secrets add-iam-policy-binding "$CRON_SECRET_NAME" \
+  --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
+  --role=roles/secretmanager.secretAccessor \
+  --project="$PROJECT_ID" >/dev/null
 
 CRON_SECRET_VALUE="$(gcloud secrets versions access latest \
   --secret="$CRON_SECRET_NAME" --project="$PROJECT_ID")"

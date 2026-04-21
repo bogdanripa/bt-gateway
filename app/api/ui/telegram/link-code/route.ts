@@ -1,18 +1,19 @@
 /**
  * POST /api/ui/telegram/link-code
  *
- * Generates a short-lived (10 min) link code. The UI shows it + the bot
- * @handle to the user; they send `/start <code>` to the bot to complete
- * the link.
+ * Generates a short-lived (10 min) link code. The user sends `/start <code>`
+ * to their own bot (configured via /api/ui/telegram/bot) to prove to the
+ * webhook that the Telegram chat belongs to the same person as the
+ * bt-gateway account.
  *
  * Regenerating overwrites the previous code — only the latest pending
  * code works. This lets the user "try again" if they've lost the code
- * without having multiple valid codes in the wild.
+ * without leaving multiple valid codes in the wild.
  */
 
 import crypto from 'node:crypto';
 import { requireFirebaseUser } from '@/lib/auth/session';
-import { setPendingTelegramLink } from '@/lib/firestore';
+import { getTelegramBot, setPendingTelegramLink } from '@/lib/firestore';
 import { ApiError } from '@/lib/errors';
 import { ok, withRoute } from '@/lib/route-handler';
 
@@ -30,19 +31,24 @@ function makeCode(length = 8): string {
 
 export const POST = withRoute(async (req) => {
   const caller = await requireFirebaseUser(req);
+
+  // Per-user bots: the user must configure their bot before we can hand out
+  // a link code. Otherwise the deep link would have nowhere to point.
+  const bot = await getTelegramBot(caller.tenant);
+  if (!bot) {
+    throw new ApiError(
+      'CONFLICT',
+      'Configure your Telegram bot first (Settings → Telegram).',
+    );
+  }
+
   const code = makeCode();
   await setPendingTelegramLink(caller.tenant, code);
-
-  // Bot username (without @) — if unset, the client will show generic copy.
-  const botUsername = process.env.TELEGRAM_BOT_USERNAME ?? '';
-  if (!process.env.TELEGRAM_BOT_TOKEN) {
-    throw new ApiError('UPSTREAM_UNAVAILABLE', 'Telegram bot not configured on this server');
-  }
 
   return ok({
     code,
     ttlMs: 10 * 60 * 1000,
-    botUsername,
-    deepLink: botUsername ? `https://t.me/${botUsername}?start=${code}` : null,
+    botUsername: bot.username,
+    deepLink: `https://t.me/${bot.username}?start=${code}`,
   });
 });

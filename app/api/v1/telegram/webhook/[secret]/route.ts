@@ -1,34 +1,39 @@
 /**
  * POST /api/v1/telegram/webhook/:secret
  *
- * Telegram Bot webhook endpoint. The secret is a path segment so Telegram's
- * POST body carries no auth token and nothing else on the internet can hit
- * the endpoint by guessing a URL. Set the webhook once via:
+ * Per-user Telegram bot webhook. Each tenant brings their own bot via
+ * @BotFather and registers its webhook at this URL with a random,
+ * per-user secret stored on their bot doc. The secret in the path segment
+ * doubles as the lookup key:
  *
- *   curl -X POST "https://api.telegram.org/bot$TOKEN/setWebhook" \
- *        -d "url=https://bt-gateway.../api/v1/telegram/webhook/$SECRET"
+ *   lookup users/{uid}/integrations/bot where _type='telegram_bot' and
+ *   webhookSecret == <secret>
  *
- * Handles a single command for now: `/start <linkCode>`. The UI generates
- * a short-lived code (stored in users/{uid}/integrations/telegram_pending)
- * and tells the user to send it to the bot. The webhook resolves the code
- * to a uid, writes the permanent `telegram` link doc with the chat_id from
- * the update, deletes the pending doc, and replies to the user.
+ * No match → respond 200 silently (don't leak existence of valid secrets,
+ * don't fan out into Cloud Logging errors when someone pokes a stale URL).
  *
- * We never 500 — even on errors we 200 with an ok body so Telegram doesn't
- * retry. Errors go to stdout via the access log.
+ * Handles `/start <linkCode>`. The UI generates a short-lived code
+ * (users/{uid}/integrations/telegram_pending). After resolving the uid
+ * from the webhookSecret we also re-check the code matches THIS uid's
+ * pending doc — a malicious stranger who finds both the bot and another
+ * user's code still cannot hijack (different uid).
+ *
+ * We always respond 200 so Telegram doesn't retry on errors.
  */
 
 import { NextResponse } from 'next/server';
-import crypto from 'node:crypto';
 import { withRoute } from '@/lib/route-handler';
 import {
-  findPendingTelegramLink,
+  findTelegramBotByWebhookSecret,
+  getPendingTelegramLinkForUid,
   clearPendingTelegramLink,
   setTelegramLink,
   tenantFromAuthedUid,
+  PENDING_TELEGRAM_LINK_TTL_MS,
 } from '@/lib/firestore';
 import { audit } from '@/lib/events';
-import { sendMessage } from '@/lib/telegram-bot';
+import { decrypt } from '@/lib/kms';
+import { sendMessageWithToken } from '@/lib/telegram-bot';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -45,23 +50,17 @@ interface TgUpdate {
   message?: TgMessage;
 }
 
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
-}
-
 // Always respond 200 so Telegram doesn't retry. Any error state is logged
 // via console.error + the access log line emitted by `withRoute`.
 const okAck = () => NextResponse.json({ ok: true });
 
 export const POST = withRoute<{ secret: string }>(async (req, { params, requestId }) => {
-  const expected = process.env.TELEGRAM_WEBHOOK_SECRET;
-  if (!expected || !params.secret || !timingSafeEqual(params.secret, expected)) {
-    // Respond 200 so random pokes don't fan out into Cloud Logging errors,
-    // but do nothing. A real Telegram webhook with the wrong secret is
-    // basically impossible — we set the URL ourselves.
-    return okAck();
-  }
+  const bot = params.secret
+    ? await findTelegramBotByWebhookSecret(params.secret).catch(() => null)
+    : null;
+  if (!bot) return okAck(); // no bot matches this secret — drop silently
+
+  const t = tenantFromAuthedUid(bot.uid);
 
   let update: TgUpdate;
   try {
@@ -74,27 +73,45 @@ export const POST = withRoute<{ secret: string }>(async (req, { params, requestI
   if (!msg?.text || !msg.chat?.id) return okAck();
 
   const startMatch = msg.text.trim().match(/^\/start(?:\s+(\S+))?/i);
-  if (!startMatch) {
-    // Unknown command — ignore.
-    return okAck();
-  }
+  if (!startMatch) return okAck();
 
   const code = startMatch[1];
   const chatId = msg.chat.id;
   const tgUsername = msg.from?.username ?? msg.chat.username;
 
+  // Decrypt the bot token once — we need it to reply below.
+  const botToken = await decrypt(bot.tokenCipher).catch(() => '');
+  if (!botToken) {
+    console.error(
+      JSON.stringify({
+        severity: 'ERROR',
+        msg: 'telegram.webhook_decrypt_failed',
+        requestId,
+        uid: bot.uid,
+      }),
+    );
+    return okAck();
+  }
+
   if (!code) {
-    await sendMessage(
+    await sendMessageWithToken(
+      botToken,
       chatId,
-      'Welcome to bt-gateway. To link your account, go to /settings in the web UI, ' +
+      'Welcome to bt-gateway. To link your chat, go to /settings in the web UI, ' +
         'tap "Generate link code", and send it here with /start <code>.',
     );
     return okAck();
   }
 
-  const pending = await findPendingTelegramLink(code).catch(() => null);
-  if (!pending) {
-    await sendMessage(
+  const pending = await getPendingTelegramLinkForUid(t).catch(() => null);
+  const codeMatches =
+    !!pending &&
+    pending.code === code &&
+    Date.now() - new Date(pending.createdAt).getTime() <= PENDING_TELEGRAM_LINK_TTL_MS;
+
+  if (!codeMatches) {
+    await sendMessageWithToken(
+      botToken,
       chatId,
       'That link code is invalid or expired. Generate a new one in the web UI ' +
         'and send it within 10 minutes.',
@@ -102,7 +119,6 @@ export const POST = withRoute<{ secret: string }>(async (req, { params, requestI
     return okAck();
   }
 
-  const t = tenantFromAuthedUid(pending.uid);
   try {
     await setTelegramLink(t, {
       chatId,
@@ -118,7 +134,8 @@ export const POST = withRoute<{ secret: string }>(async (req, { params, requestI
       requestId,
       detail: { chatId, username: tgUsername },
     });
-    await sendMessage(
+    await sendMessageWithToken(
+      botToken,
       chatId,
       'Linked. You will get an alert here when bt-gateway signs into BT Trade, ' +
         'or when a sign-in fails. Routine 45-minute refreshes will NOT be announced.',
@@ -129,11 +146,12 @@ export const POST = withRoute<{ secret: string }>(async (req, { params, requestI
         severity: 'ERROR',
         msg: 'telegram.link_write_failed',
         requestId,
-        uid: pending.uid,
+        uid: bot.uid,
         err: (e as Error).message,
       }),
     );
-    await sendMessage(
+    await sendMessageWithToken(
+      botToken,
       chatId,
       'Something went wrong saving the link. Please try again from the web UI.',
     );
