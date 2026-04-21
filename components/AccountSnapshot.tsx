@@ -24,8 +24,11 @@ interface Holding {
 
 interface Snapshot {
   mode: Mode;
-  cash: CashData;
-  holdings: Holding[] | { items?: Holding[]; [key: string]: unknown };
+  currencyId?: number;
+  cash: CashData | null;
+  cashError?: string | null;
+  holdings: Holding[] | { items?: Holding[]; [key: string]: unknown } | null;
+  holdingsError?: string | null;
 }
 
 function formatRon(n: number | undefined): string {
@@ -60,7 +63,7 @@ export function AccountSnapshot() {
     }
   }
 
-  const holdings: Holding[] = snapshot
+  const holdings: Holding[] = snapshot && snapshot.holdings
     ? Array.isArray(snapshot.holdings)
       ? snapshot.holdings
       : ((snapshot.holdings as { items?: Holding[] }).items ?? [])
@@ -99,6 +102,13 @@ export function AccountSnapshot() {
       )}
 
       {err && <div className="notice err" style={{ marginTop: '1rem' }}>{err}</div>}
+
+      {snapshot && !loading && (snapshot.cashError || snapshot.holdingsError) && (
+        <div className="notice err" style={{ marginTop: '1rem' }}>
+          {snapshot.cashError && <div>Cash: {snapshot.cashError}</div>}
+          {snapshot.holdingsError && <div>Holdings: {snapshot.holdingsError}</div>}
+        </div>
+      )}
 
       {snapshot && !loading && (
         <div style={{ marginTop: '1rem' }}>

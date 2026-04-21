@@ -13,6 +13,7 @@
 import { requireFirebaseUser } from '@/lib/auth/session';
 import { getBtClient } from '@/lib/bt/client-pool';
 import { getPortfolioKey } from '@/lib/bt/portfolio-key';
+import { getEvaluationCurrencyId } from '@/lib/bt/currency';
 import { ApiError } from '@/lib/errors';
 import { ok, withRoute } from '@/lib/route-handler';
 import type { BtMode } from '@/lib/firestore';
@@ -31,25 +32,27 @@ export const GET = withRoute(async (req) => {
 
   const client = await getBtClient(caller.tenant, mode);
   const portfolioKey = await getPortfolioKey(caller.tenant, mode, client);
+  const currencyId = await getEvaluationCurrencyId(caller.tenant, mode, client);
 
-  let currencyId: string;
-  try {
-    const profile = await client.profile.get();
-    currencyId = profile.selectedPortfolioPanelCurrencyID;
-  } catch (e) {
-    throw new ApiError('UPSTREAM_UNAVAILABLE', `BT getProfile failed: ${(e as Error).message}`);
+  // Fetch cash and holdings independently so a cash failure doesn't also
+  // hide the positions (and vice versa). The UI will render whatever came
+  // back and show per-section errors for the rest.
+  const [cashResult, holdingsResult] = await Promise.allSettled([
+    client.portfolio.getCash({ portfolioKey, currencyId }),
+    client.portfolio.getHoldings({ portfolioKey }),
+  ]);
+
+  const cash = cashResult.status === 'fulfilled' ? cashResult.value : null;
+  const cashError = cashResult.status === 'rejected' ? (cashResult.reason as Error).message : null;
+  const holdings = holdingsResult.status === 'fulfilled' ? holdingsResult.value : null;
+  const holdingsError = holdingsResult.status === 'rejected' ? (holdingsResult.reason as Error).message : null;
+
+  if (!cash && !holdings) {
+    throw new ApiError(
+      'UPSTREAM_UNAVAILABLE',
+      `BT fetch failed: cash=${cashError}; holdings=${holdingsError}`,
+    );
   }
 
-  let cash: unknown;
-  let holdings: unknown;
-  try {
-    [cash, holdings] = await Promise.all([
-      client.portfolio.getCash({ portfolioKey, currencyId }),
-      client.portfolio.getHoldings({ portfolioKey }),
-    ]);
-  } catch (e) {
-    throw new ApiError('UPSTREAM_UNAVAILABLE', `BT fetch failed: ${(e as Error).message}`);
-  }
-
-  return ok({ mode, cash, holdings });
+  return ok({ mode, currencyId, cash, cashError, holdings, holdingsError });
 });

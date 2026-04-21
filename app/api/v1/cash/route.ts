@@ -12,6 +12,7 @@
 import { requireApiKey } from '@/lib/auth/api-key';
 import { getBtClient } from '@/lib/bt/client-pool';
 import { getPortfolioKey } from '@/lib/bt/portfolio-key';
+import { getEvaluationCurrencyId } from '@/lib/bt/currency';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
 
@@ -23,17 +24,10 @@ export const GET = withRoute(async (req) => {
   const client = await getBtClient(caller.tenant, caller.mode);
   const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
 
-  // getCash requires the evaluation currencyId — the currency shown in
-  // the BT Trade web UI's portfolio panel. Pull it from the user profile.
-  let currencyId: string;
-  try {
-    const profile = await client.profile.get();
-    currencyId = profile.selectedPortfolioPanelCurrencyID;
-  } catch (e) {
-    throw new ApiError('UPSTREAM_UNAVAILABLE', `BT getProfile failed: ${(e as Error).message}`, {
-      context: { uid: caller.tenant.uid, mode: caller.mode },
-    });
-  }
+  // getCash requires the evaluation currencyId. Some accounts don't have
+  // `profile.selectedPortfolioPanelCurrencyID` populated — the helper
+  // falls back to the evaluation-currencies nomenclature (preferring RON).
+  const currencyId = await getEvaluationCurrencyId(caller.tenant, caller.mode, client);
 
   let cash: unknown;
   try {
