@@ -1,0 +1,148 @@
+/**
+ * POST /api/v1/orders — place a live order (MUTATING; audited).
+ * GET  /api/v1/orders — list orders with optional filters (read-only).
+ *
+ * POST body:
+ *   {
+ *     symbol: "TVBETETF",
+ *     marketId?: "<id>",
+ *     quantity: number,
+ *     price?: number,              // required unless type === "market"
+ *     side: "buy" | "sell",
+ *     type?: "limit" | "market",   // default "limit"
+ *     valability?: "day" | "gtc"   // default "day"
+ *   }
+ *
+ * The mode is implied by the API key prefix — a `bvb_demo_...` key places
+ * demo orders, a `bvb_live_...` key places live ones. There is no body
+ * param to pick between them; that's a load-bearing invariant.
+ *
+ * GET query params:
+ *   ?statuses=OPEN,FILLED   (comma-separated; passed as string[] to BT)
+ *   ?side=buy|sell
+ *   ?symbol=XXX
+ *   ?startDate=YYYY-MM-DD   (BT expects DD.MM.YYYY; the client normalizes)
+ *   ?endDate=YYYY-MM-DD
+ */
+
+import { z } from 'zod';
+import { requireApiKey } from '@/lib/auth/api-key';
+import { getBtClient } from '@/lib/bt/client-pool';
+import { getPortfolioKey } from '@/lib/bt/portfolio-key';
+import { ok, withRoute } from '@/lib/route-handler';
+import { ApiError } from '@/lib/errors';
+import { audit } from '@/lib/events';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+
+const PlaceSchema = z.object({
+  symbol: z.string().min(1).max(32),
+  marketId: z.union([z.string(), z.number()]).optional(),
+  quantity: z.number().int().positive(),
+  price: z.number().positive().optional(),
+  side: z.enum(['buy', 'sell']),
+  type: z.enum(['limit', 'market']).default('limit'),
+  valability: z.enum(['day', 'gtc']).default('day'),
+});
+
+export const POST = withRoute(async (req, { requestId }) => {
+  const caller = await requireApiKey(req);
+  const body = await req.json().catch(() => null);
+  const parsed = PlaceSchema.safeParse(body);
+  if (!parsed.success) {
+    throw new ApiError('BAD_REQUEST', 'Invalid order body', {
+      context: { issues: parsed.error.issues },
+    });
+  }
+  const args = parsed.data;
+  if (args.type !== 'market' && !args.price) {
+    throw new ApiError('BAD_REQUEST', 'price is required for non-market orders');
+  }
+
+  const client = await getBtClient(caller.tenant, caller.mode);
+  const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
+
+  let marketId = args.marketId;
+  let symbol = args.symbol.toUpperCase();
+  if (!marketId) {
+    const hits = await client.markets.searchInstrument(symbol).catch((e) => {
+      throw new ApiError('UPSTREAM_UNAVAILABLE', `searchInstrument: ${(e as Error).message}`);
+    });
+    const first = hits[0] as { code?: string; marketId?: string | number } | undefined;
+    if (!first?.marketId) throw new ApiError('NOT_FOUND', `Instrument not found: ${symbol}`);
+    marketId = first.marketId;
+    symbol = first.code ?? symbol;
+  }
+
+  try {
+    const result = await client.orders.placeOrder({
+      portfolioKey,
+      symbol,
+      marketId,
+      quantity: args.quantity,
+      price: args.price,
+      side: args.side,
+      type: args.type,
+      valability: args.valability,
+    });
+    await audit({
+      tenant: caller.tenant,
+      type: 'order.placed',
+      actor: `api_key:${caller.keyId}`,
+      mode: caller.mode,
+      status: 'ok',
+      requestId,
+      detail: {
+        symbol,
+        marketId,
+        quantity: args.quantity,
+        price: args.price,
+        side: args.side,
+        type: args.type,
+        valability: args.valability,
+        result,
+      },
+    });
+    return ok({ mode: caller.mode, order: result });
+  } catch (e) {
+    const msg = (e as Error).message || 'placeOrder failed';
+    await audit({
+      tenant: caller.tenant,
+      type: 'order.rejected',
+      actor: `api_key:${caller.keyId}`,
+      mode: caller.mode,
+      status: 'err',
+      requestId,
+      detail: { symbol, marketId, quantity: args.quantity, price: args.price, side: args.side, type: args.type },
+      error: { code: 'PLACE_FAILED', message: msg },
+    });
+    throw new ApiError('UPSTREAM_UNAVAILABLE', `placeOrder failed: ${msg}`);
+  }
+});
+
+export const GET = withRoute(async (req) => {
+  const caller = await requireApiKey(req);
+  const client = await getBtClient(caller.tenant, caller.mode);
+  const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
+
+  const sp = req.nextUrl.searchParams;
+  const statusesRaw = sp.get('statuses');
+  const statuses = statusesRaw ? statusesRaw.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
+  const sideRaw = sp.get('side');
+  const side = sideRaw === 'buy' || sideRaw === 'sell' ? sideRaw : undefined;
+
+  try {
+    const orders = await client.orders.search({
+      portfolioKey,
+      statuses,
+      side,
+      symbol: sp.get('symbol') ?? undefined,
+      startDate: sp.get('startDate') ?? undefined,
+      endDate: sp.get('endDate') ?? undefined,
+    });
+    return ok({ mode: caller.mode, orders });
+  } catch (e) {
+    throw new ApiError('UPSTREAM_UNAVAILABLE', `orders.search failed: ${(e as Error).message}`);
+  }
+});

@@ -154,6 +154,31 @@ else
     --project="$PROJECT_ID"
 fi
 
+# ---- Cloud KMS keyring + key (tenant credential envelope encryption) ------
+# The runtime SA encrypts/decrypts BT Trade usernames + passwords using this
+# key. Key rotation is set to 90 days — old wrapped DEKs keep working because
+# KMS tracks versions. `lib/kms.ts` reads the key version back from the
+# wrap response and stores it alongside the ciphertext for auditing.
+KMS_KEYRING="${KMS_KEYRING:-bt-gateway}"
+KMS_KEY="${KMS_KEY:-tenant-creds}"
+
+if ! gcloud kms keyrings describe "$KMS_KEYRING" \
+     --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+  run gcloud kms keyrings create "$KMS_KEYRING" \
+    --location="$REGION" --project="$PROJECT_ID"
+fi
+
+if ! gcloud kms keys describe "$KMS_KEY" \
+     --keyring="$KMS_KEYRING" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
+  run gcloud kms keys create "$KMS_KEY" \
+    --keyring="$KMS_KEYRING" \
+    --location="$REGION" \
+    --purpose=encryption \
+    --rotation-period=90d \
+    --next-rotation-time="$(date -u -v+90d '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -d '+90 days' '+%Y-%m-%dT%H:%M:%SZ')" \
+    --project="$PROJECT_ID"
+fi
+
 # ---- Artifact Registry ----------------------------------------------------
 if ! gcloud artifacts repositories describe "$AR_REPO" \
      --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
@@ -275,6 +300,7 @@ cat <<EOF
  Deployer SA        : $DEPLOYER_SA_EMAIL
  WIF provider       : $WIF_PROVIDER_RESOURCE
  Artifact Registry  : ${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPO}
+ KMS key            : projects/${PROJECT_ID}/locations/${REGION}/keyRings/${KMS_KEYRING}/cryptoKeys/${KMS_KEY}
 
  Add these to GitHub Actions repository secrets
  (Settings → Secrets and variables → Actions → Repository secrets):
