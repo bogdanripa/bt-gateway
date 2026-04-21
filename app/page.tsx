@@ -1,19 +1,22 @@
-/**
- * Placeholder landing page. Real UI lands in M3 (Firebase Auth gate, dashboard,
- * audit log, settings pages). For M1 all we need is "something shows up" when
- * someone opens the root URL so the Cloud Run deploy can be verified in a
- * browser, not just with curl.
- */
-export default function Home() {
+'use client';
+
+import { AuthGate } from '@/components/auth/AuthGate';
+import { Nav } from '@/components/Nav';
+import { AuditFeed } from '@/components/AuditFeed';
+
+export default function HomePage() {
   return (
-    <main style={{ padding: '4rem 2rem', maxWidth: 720, margin: '0 auto' }}>
-      <h1 style={{ fontSize: '1.8rem', margin: 0 }}>bt-gateway</h1>
-      <p style={{ opacity: 0.7, marginTop: '0.5rem' }}>
-        Multi-tenant BT Trade HTTP gateway. Web UI arrives in M3.
-      </p>
-      <p style={{ opacity: 0.5, marginTop: '2rem', fontSize: '0.85rem' }}>
-        Health probe: <a href="/api/health" style={{ color: '#6ea8fe' }}>/api/health</a>
-      </p>
-    </main>
+    <AuthGate>
+      <Nav />
+      <main className="container">
+        <h1>Dashboard</h1>
+        <p className="dim">
+          Everything bt-gateway does on your behalf — sign-ins, refreshes, orders,
+          credential and key changes — is logged below. Read operations (cash,
+          holdings, quotes) are not audited here; they live in Cloud Logging.
+        </p>
+        <AuditFeed />
+      </main>
+    </AuthGate>
   );
 }

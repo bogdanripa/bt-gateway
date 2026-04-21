@@ -71,7 +71,7 @@ jobs:
             --service-account="$RUNTIME_SA" \
             --vpc-connector="$CONNECTOR" \
             --vpc-egress=all-traffic \
-            --set-env-vars="BT_GATEWAY_COMMIT=${{ github.sha }}" \
+            --set-env-vars="BT_GATEWAY_COMMIT=${{ github.sha }},FIREBASE_PROJECT_ID=${{ secrets.FIREBASE_PROJECT_ID }},FIREBASE_WEB_API_KEY=${{ secrets.FIREBASE_WEB_API_KEY }},FIREBASE_WEB_AUTH_DOMAIN=${{ secrets.FIREBASE_WEB_AUTH_DOMAIN }},TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}" \
             --quiet
 
       - name: Show service URL
