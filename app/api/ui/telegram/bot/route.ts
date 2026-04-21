@@ -29,7 +29,7 @@ import {
 import { ApiError } from '@/lib/errors';
 import { ok, withRoute } from '@/lib/route-handler';
 import { encrypt } from '@/lib/kms';
-import { getBotProfile } from '@/lib/telegram-bot';
+import { getBotProfile, setWebhook } from '@/lib/telegram-bot';
 import { audit } from '@/lib/events';
 
 export const runtime = 'nodejs';
@@ -110,18 +110,28 @@ export const PUT = withRoute(async (req) => {
     await clearTelegramLink(caller.tenant).catch(() => { /* best-effort */ });
   }
 
+  // Register the webhook with Telegram automatically — no manual curl needed.
+  const wUrl = webhookUrl(req, webhookSecret);
+  const webhookOk = await setWebhook(body.token, wUrl);
+
   await audit({
     tenant: caller.tenant,
-    type: 'telegram.linked', // reuse — detail.step disambiguates in UI if needed
+    type: 'telegram.linked',
     actor: 'user',
     status: 'ok',
-    detail: { step: 'bot_configured', username: profile.username, rotated: !!existing },
+    detail: {
+      step: 'bot_configured',
+      username: profile.username,
+      rotated: !!existing,
+      webhookRegistered: webhookOk,
+    },
   });
 
   return ok({
     configured: true,
     username: profile.username,
-    webhookUrl: webhookUrl(req, webhookSecret),
+    webhookUrl: wUrl,
+    webhookRegistered: webhookOk,
     updatedAt: now,
   });
 });

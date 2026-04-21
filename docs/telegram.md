@@ -35,27 +35,10 @@ Optional but nice:
 
 1. Open the bt-gateway web UI → **Settings → Notifications → Telegram bot**.
 2. Click **Add bot**, paste the token, click **Save bot**.
-3. The server verifies the token with Telegram, stores it encrypted, and
-   shows you a **Webhook URL**. Copy that URL.
+3. The server verifies the token with Telegram, registers the webhook
+   automatically, and stores the token encrypted. No `setWebhook` curl needed.
 
-## 3. Point Telegram at the webhook
-
-Telegram pushes DMs your bot receives to the URL you register. Run this
-once (anywhere — your laptop, Cloud Shell, a throwaway terminal). Replace
-`<TOKEN>` with the BotFather token and `<WEBHOOK_URL>` with the value the
-UI gave you:
-
-```bash
-curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" \
-  -d "url=<WEBHOOK_URL>"
-```
-
-You should get `{"ok":true,"result":true,"description":"Webhook was set"}`.
-
-(The Settings UI shows the exact curl command with your webhook URL
-filled in — copy-paste it.)
-
-## 4. Link your personal chat
+## 3. Link your personal chat
 
 The bot can now receive messages, but bt-gateway doesn't yet know which
 Telegram user is you. To prove identity:
@@ -69,9 +52,9 @@ Codes expire after 10 minutes. Generate a new one if needed.
 
 ## Rotating or removing the bot
 
-- **Rotate the token** (e.g. you regenerated it with `/revoke` in BotFather):
-  click **Rotate token** in the UI, paste the new token. The webhook URL
-  stays the same — you do NOT need to re-run `setWebhook`.
+- **Replace the token** (e.g. you regenerated it with `/revoke` in BotFather):
+  click **Replace token** in the UI, paste the new token. The webhook is
+  re-registered automatically — nothing else to do.
 - **Switch to a different bot**: same as rotate, but the chat link is cleared
   (the old link points to a chat on a bot that isn't ours anymore). Re-link
   after pasting the new token.
@@ -89,6 +72,7 @@ Codes expire after 10 minutes. Generate a new one if needed.
   ```bash
   curl "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"
   ```
-  The `url` should match what the UI shows, and `last_error_message` should
+  The `url` should match what bt-gateway set, and `last_error_message` should
   be empty. If it's non-empty, Telegram is telling you why deliveries are
-  failing (usually stale URL after a Cloud Run domain change).
+  failing (usually a stale URL after a Cloud Run domain change — fix by
+  clicking **Replace token** in Settings to re-register the webhook).

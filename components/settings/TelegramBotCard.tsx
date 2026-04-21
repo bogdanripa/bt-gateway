@@ -1,14 +1,10 @@
 /**
  * Per-user Telegram bot config. The user:
  *   1. Creates a bot with @BotFather in Telegram (one-off).
- *   2. Pastes the bot token here. The server validates with Telegram's
- *      getMe endpoint, stores the token envelope-encrypted via KMS, and
- *      returns the webhook URL we need Telegram to call.
- *   3. Runs a single `setWebhook` curl against the Telegram API pointing
- *      at that URL (copy-paste command shown below).
+ *   2. Pastes the bot token here. The server validates it, registers the
+ *      webhook with Telegram automatically, and stores the token encrypted.
  *
- * Once that's done, TelegramCard (the chat-link flow) unlocks and the user
- * can finish linking their personal chat via /start <code>.
+ * Once done, TelegramCard (the chat-link flow) unlocks.
  */
 
 'use client';
@@ -19,7 +15,7 @@ import { uiFetch } from '@/lib/ui-client';
 interface BotStatus {
   configured: boolean;
   username?: string;
-  webhookUrl?: string;
+  webhookRegistered?: boolean;
   updatedAt?: string;
 }
 
@@ -87,7 +83,7 @@ export function TelegramBotCard({ onChange }: { onChange?: () => void }) {
         Each user brings their own bot. Create one in Telegram via{' '}
         <a href="https://t.me/BotFather" target="_blank" rel="noreferrer">@BotFather</a>{' '}
         (<span className="mono">/newbot</span>), then paste the bot token here.
-        See <a href="/docs/telegram" target="_blank" rel="noreferrer">the Telegram setup guide</a>.
+        The webhook is registered automatically.
       </p>
 
       {err && <div className="notice err">{err}</div>}
@@ -106,22 +102,6 @@ export function TelegramBotCard({ onChange }: { onChange?: () => void }) {
           <div>
             <label>Bot</label>
             <span className="mono">@{status.username}</span>
-          </div>
-          <div>
-            <label>Webhook URL</label>
-            <div className="mono-block" style={{ wordBreak: 'break-all' }}>
-              {status.webhookUrl}
-            </div>
-          </div>
-          <div>
-            <label>Point Telegram at the webhook</label>
-            <p className="dim">
-              Run this once (replace <span className="mono">&lt;TOKEN&gt;</span> with
-              your bot token from @BotFather):
-            </p>
-            <div className="mono-block" style={{ wordBreak: 'break-all' }}>
-              {`curl -X POST "https://api.telegram.org/bot<TOKEN>/setWebhook" -d "url=${status.webhookUrl}"`}
-            </div>
           </div>
           <div>
             <label>Updated</label>
@@ -152,11 +132,6 @@ export function TelegramBotCard({ onChange }: { onChange?: () => void }) {
               disabled={busy}
               style={{ width: '100%' }}
             />
-            <p className="dim">
-              Pasted into an encrypted field — only the hash-like shape is stored
-              in the browser (no logging). The server envelope-encrypts it via
-              Cloud KMS before persisting.
-            </p>
           </div>
           <div className="row" style={{ gap: '0.5rem' }}>
             <button onClick={() => { void save(); }} disabled={busy || !token.trim()}>

@@ -54,6 +54,44 @@ export async function sendMessageWithToken(
 }
 
 /**
+ * Register a webhook URL with Telegram. Called automatically when the user
+ * saves a bot token so they never have to run setWebhook manually.
+ * Returns true on success, false + logs on failure (non-fatal — the token
+ * is still persisted; the user can retry by re-saving).
+ */
+export async function setWebhook(botToken: string, url: string): Promise<boolean> {
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/setWebhook`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const body = (await res.json()) as { ok: boolean; description?: string };
+    if (!body.ok) {
+      console.error(
+        JSON.stringify({
+          severity: 'WARNING',
+          msg: 'telegram.setWebhook_failed',
+          description: body.description,
+        }),
+      );
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.error(
+      JSON.stringify({
+        severity: 'WARNING',
+        msg: 'telegram.setWebhook_error',
+        err: (e as Error).message,
+      }),
+    );
+    return false;
+  }
+}
+
+/**
  * One-shot probe: ask Telegram for the bot's own profile. Used when the
  * user saves a new bot token so we can confirm the token is valid (and
  * surface the @username it actually belongs to) before persisting.
