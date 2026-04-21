@@ -72,6 +72,23 @@ run gcloud services enable \
   secretmanager.googleapis.com \
   --project="$PROJECT_ID"
 
+# `services enable` returns success before the API is actually usable
+# elsewhere (Google's internal propagation takes 60–120 s). Poll until the
+# first API we need — Compute — responds, then fall through. Without this,
+# the very next `networks create` call can fail with SERVICE_DISABLED.
+echo "Waiting for Compute Engine API to become usable (propagation)..."
+for attempt in $(seq 1 24); do
+  if gcloud compute networks list --project="$PROJECT_ID" --limit=1 >/dev/null 2>&1; then
+    echo "Compute API ready after ${attempt}×5s."
+    break
+  fi
+  if [[ "$attempt" == "24" ]]; then
+    echo "Compute API still not responding after 120s — aborting. Re-run the script." >&2
+    exit 1
+  fi
+  sleep 5
+done
+
 # ---- VPC + subnet ---------------------------------------------------------
 if ! gcloud compute networks describe "$VPC_NAME" --project="$PROJECT_ID" >/dev/null 2>&1; then
   run gcloud compute networks create "$VPC_NAME" \
