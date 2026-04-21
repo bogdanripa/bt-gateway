@@ -26,7 +26,10 @@ async function lookupEgressIp(): Promise<string | null> {
       // Short timeout — health checks fire on cold starts and from the
       // uptime monitor; we don't want a slow ipify request to make the
       // probe look unhealthy.
-      signal: AbortSignal.timeout(2000),
+      // 8s, not 2s — cold-path VPC Connector adds a few seconds on first
+      // egress. Tight timeouts here produce false "null" readings that are
+      // indistinguishable from actual NAT/routing failure.
+      signal: AbortSignal.timeout(8000),
       cache: 'no-store',
     });
     if (!res.ok) return null;

@@ -139,8 +139,18 @@ if ! gcloud compute routers nats describe "$NAT_NAME" \
   run gcloud compute routers nats create "$NAT_NAME" \
     --router="$ROUTER_NAME" \
     --region="$REGION" \
-    --nat-custom-subnet-ip-ranges="$SUBNET_NAME" \
+    --nat-all-subnet-ip-ranges \
     --nat-external-ip-pool="$STATIC_IP_NAME" \
+    --project="$PROJECT_ID"
+else
+  # NAT exists — make sure it covers ALL subnets in the VPC, not just the
+  # main one. The VPC Connector runs in its own hidden /28 subnet; without
+  # "all subnets" NAT coverage, Cloud Run traffic through the connector
+  # has no egress path and outbound fetches silently fail.
+  run gcloud compute routers nats update "$NAT_NAME" \
+    --router="$ROUTER_NAME" \
+    --region="$REGION" \
+    --nat-all-subnet-ip-ranges \
     --project="$PROJECT_ID"
 fi
 
