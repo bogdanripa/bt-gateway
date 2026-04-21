@@ -5,10 +5,21 @@ import { uiFetch } from '@/lib/ui-client';
 
 type Mode = 'demo' | 'live';
 
-interface CashData {
-  availableAmount?: number;
-  totalAmount?: number;
-  currencyId?: string;
+interface MoneyValue {
+  formatted?: string;
+  amount?: number;
+  currency?: string;
+  direction?: string;
+  [key: string]: unknown;
+}
+
+interface BalanceEntry {
+  title?: string;
+  type?: string;
+  value?: MoneyValue;
+  highlightText?: string;
+  highlightBackground?: string;
+  balanceId?: string;
   [key: string]: unknown;
 }
 
@@ -25,7 +36,7 @@ interface Holding {
 interface Snapshot {
   mode: Mode;
   currencyId?: number;
-  cash: CashData | null;
+  cash: BalanceEntry[] | null;
   cashError?: string | null;
   holdings: Holding[] | { items?: Holding[]; [key: string]: unknown } | null;
   holdingsError?: string | null;
@@ -69,8 +80,17 @@ export function AccountSnapshot() {
       : ((snapshot.holdings as { items?: Holding[] }).items ?? [])
     : [];
 
-  const available = snapshot?.cash?.availableAmount;
-  const total = snapshot?.cash?.totalAmount;
+  const cashEntries: BalanceEntry[] = Array.isArray(snapshot?.cash) ? snapshot!.cash! : [];
+
+  function formatEntry(v: MoneyValue | undefined): string {
+    if (!v) return '—';
+    if (v.formatted) return v.formatted;
+    if (typeof v.amount === 'number') {
+      const n = v.amount.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      return v.currency ? `${n} ${v.currency}` : n;
+    }
+    return '—';
+  }
 
   return (
     <div className="card">
@@ -112,15 +132,20 @@ export function AccountSnapshot() {
 
       {snapshot && !loading && (
         <div style={{ marginTop: '1rem' }}>
-          <div className="row" style={{ gap: '2rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-            <div>
-              <label>Available cash</label>
-              <span className="mono" style={{ fontSize: '1.1rem' }}>{formatRon(available)}</span>
-            </div>
-            {total !== undefined && total !== available && (
+          <div className="row" style={{ gap: '2rem', flexWrap: 'wrap', marginBottom: '1rem', alignItems: 'flex-start' }}>
+            {cashEntries.length > 0 ? (
+              cashEntries.map((e, i) => (
+                <div key={e.balanceId ?? i}>
+                  <label>{e.title ?? e.type ?? 'Balance'}</label>
+                  <span className="mono" style={{ fontSize: i === 0 ? '1.1rem' : undefined }}>
+                    {formatEntry(e.value)}
+                  </span>
+                </div>
+              ))
+            ) : (
               <div>
-                <label>Total cash</label>
-                <span className="mono">{formatRon(total)}</span>
+                <label>Cash</label>
+                <span className="mono">—</span>
               </div>
             )}
             <div>
