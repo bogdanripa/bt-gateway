@@ -44,13 +44,21 @@ const PutBody = z.object({
 });
 
 function webhookUrl(req: Request, secret: string): string {
-  // Prefer the configured public origin (set via BT_GATEWAY_PUBLIC_URL when
-  // we want to override Cloud Run's default host). Fall back to the Host
-  // header so local dev / preview environments work without config.
+  // Prefer an explicit override (useful for custom domains).
   const configured = process.env.BT_GATEWAY_PUBLIC_URL?.replace(/\/+$/, '');
   if (configured) return `${configured}/api/v1/telegram/webhook/${secret}`;
-  const origin = new URL(req.url).origin;
-  return `${origin}/api/v1/telegram/webhook/${secret}`;
+
+  // req.url on Cloud Run is the internal container address (0.0.0.0:8080).
+  // The real public hostname comes from x-forwarded-host (set by the Google
+  // Front End) or the Host header. Fall back to req.url only in local dev.
+  const headers = req.headers as Headers;
+  const host =
+    headers.get('x-forwarded-host') ??
+    headers.get('host') ??
+    new URL(req.url).host;
+  const proto =
+    headers.get('x-forwarded-proto')?.split(',')[0].trim() ?? 'https';
+  return `${proto}://${host}/api/v1/telegram/webhook/${secret}`;
 }
 
 export const GET = withRoute(async (req) => {
