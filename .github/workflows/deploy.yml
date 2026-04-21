@@ -1,0 +1,82 @@
+name: Build & deploy to Cloud Run
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One in-flight deploy at a time per branch. A second push queues behind the
+# first so we never race the "gcloud run deploy" step.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  id-token: write   # needed for Workload Identity Federation
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+      REGION:     ${{ secrets.GCP_REGION }}
+      AR_REPO:    ${{ secrets.GCP_AR_REPO }}
+      SERVICE:    ${{ secrets.CLOUD_RUN_SERVICE }}
+      RUNTIME_SA: ${{ secrets.GCP_RUNTIME_SA }}
+      CONNECTOR:  ${{ secrets.GCP_CONNECTOR }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to GCP (WIF)
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account:            ${{ secrets.GCP_DEPLOYER_SA }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker auth for Artifact Registry
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - name: Build & push image
+        env:
+          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.AR_REPO }}/${{ env.SERVICE }}:${{ github.sha }}
+        run: |
+          docker build \
+            --build-arg GIT_SHA=${{ github.sha }} \
+            -t "$IMAGE" \
+            .
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Deploy to Cloud Run
+        # Keep the flags that define our security + network posture in sync
+        # with infra/provision-m1.sh. If you change one, change the other.
+        run: |
+          gcloud run deploy "$SERVICE" \
+            --image="$IMAGE" \
+            --region="$REGION" \
+            --project="$PROJECT_ID" \
+            --platform=managed \
+            --allow-unauthenticated \
+            --min-instances=1 \
+            --max-instances=5 \
+            --cpu=1 --memory=512Mi \
+            --service-account="$RUNTIME_SA" \
+            --vpc-connector="$CONNECTOR" \
+            --vpc-egress=all-traffic \
+            --set-env-vars="BT_GATEWAY_COMMIT=${{ github.sha }}" \
+            --quiet
+
+      - name: Show service URL
+        run: |
+          url=$(gcloud run services describe "$SERVICE" \
+            --region="$REGION" --project="$PROJECT_ID" --format='value(status.url)')
+          echo "Service URL: $url"
+          echo "::notice title=Deployed::$url"
