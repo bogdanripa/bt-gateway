@@ -129,7 +129,7 @@ export function TelegramBotCard({ onChange }: { onChange?: () => void }) {
           </div>
           <div className="row" style={{ gap: '0.5rem' }}>
             <button className="ghost" onClick={() => setEditing(true)} disabled={busy}>
-              Rotate token
+              Replace token
             </button>
             <button className="danger" onClick={() => { void remove(); }} disabled={busy}>
               Remove bot
