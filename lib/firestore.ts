@@ -216,6 +216,32 @@ function telegramBotDoc(t: TenantRef): DocumentReference {
   return userDoc(t).collection('integrations').doc('bot');
 }
 
+// Trading state — tenant + mode scoped so demo/live never cross.
+// Layout: users/{uid}/trading_state/{mode}/<subcollection>/<doc>
+function tradingStateDoc(t: TenantRef, mode: BtMode): DocumentReference {
+  return userDoc(t).collection('trading_state').doc(mode);
+}
+
+function portfolioStateDoc(t: TenantRef, mode: BtMode): DocumentReference {
+  return tradingStateDoc(t, mode).collection('portfolio').doc('current');
+}
+
+function journalCol(t: TenantRef, mode: BtMode): CollectionReference {
+  return tradingStateDoc(t, mode).collection('journal');
+}
+
+function fillsCol(t: TenantRef, mode: BtMode): CollectionReference {
+  return tradingStateDoc(t, mode).collection('fills');
+}
+
+function consideredCol(t: TenantRef, mode: BtMode): CollectionReference {
+  return tradingStateDoc(t, mode).collection('considered');
+}
+
+function snapshotsCol(t: TenantRef, mode: BtMode): CollectionReference {
+  return tradingStateDoc(t, mode).collection('snapshots');
+}
+
 // ---- high-level read/write -------------------------------------------------
 
 export async function getUser(t: TenantRef): Promise<UserDoc | null> {
@@ -421,4 +447,144 @@ export async function listActiveTenantUids(): Promise<string[]> {
     if (parts.length >= 2) uids.add(parts[1]);
   }
   return [...uids];
+}
+
+// ---- trading state: read/write helpers ------------------------------------
+//
+// All of these are tenant + mode scoped. The auto-trading project used to hit
+// Firestore directly; now it goes through the bt-gateway API key and these
+// helpers enforce isolation the same way BT creds / sessions do.
+
+/** Portfolio state singleton (mirrors the old portfolio_state/current doc). */
+export async function getPortfolioState(
+  t: TenantRef,
+  mode: BtMode,
+): Promise<Record<string, unknown> | null> {
+  const snap = await portfolioStateDoc(t, mode).get();
+  return snap.exists ? (snap.data() as Record<string, unknown>) : null;
+}
+
+export async function setPortfolioState(
+  t: TenantRef,
+  mode: BtMode,
+  state: Record<string, unknown>,
+): Promise<void> {
+  await portfolioStateDoc(t, mode).set(state);
+}
+
+/**
+ * Append a record to a tenant+mode-scoped append-only collection. If `record`
+ * has a string `id` field, uses it as the doc id for dedup; otherwise auto-id.
+ * Returns the resulting doc id.
+ */
+async function appendTo(
+  col: CollectionReference,
+  record: Record<string, unknown>,
+  idField?: string,
+): Promise<string> {
+  const explicit = idField ? record[idField] : undefined;
+  if (typeof explicit === 'string' && explicit.length > 0) {
+    await col.doc(explicit).set(record);
+    return explicit;
+  }
+  const ref = await col.add(record);
+  return ref.id;
+}
+
+export async function appendJournalEntry(
+  t: TenantRef,
+  mode: BtMode,
+  record: Record<string, unknown>,
+): Promise<string> {
+  return appendTo(journalCol(t, mode), record, 'journal_id');
+}
+
+export async function listJournalEntries(
+  t: TenantRef,
+  mode: BtMode,
+  opts: { since?: string; limit?: number; type?: string } = {},
+): Promise<Record<string, unknown>[]> {
+  let q = journalCol(t, mode).orderBy('timestamp', 'desc');
+  if (opts.since) q = q.where('timestamp', '>=', opts.since);
+  if (opts.type) q = q.where('type', '==', opts.type);
+  q = q.limit(Math.min(opts.limit ?? 500, 5000));
+  const snap = await q.get();
+  return snap.docs.map((d) => d.data() as Record<string, unknown>);
+}
+
+export async function appendFillRecord(
+  t: TenantRef,
+  mode: BtMode,
+  record: Record<string, unknown>,
+): Promise<string> {
+  return appendTo(fillsCol(t, mode), record, 'fill_id');
+}
+
+export async function listFillRecords(
+  t: TenantRef,
+  mode: BtMode,
+  opts: { since?: string; limit?: number } = {},
+): Promise<Record<string, unknown>[]> {
+  let q = fillsCol(t, mode).orderBy('filled_at', 'desc');
+  if (opts.since) q = q.where('filled_at', '>=', opts.since);
+  q = q.limit(Math.min(opts.limit ?? 500, 5000));
+  const snap = await q.get();
+  return snap.docs.map((d) => d.data() as Record<string, unknown>);
+}
+
+export async function appendConsideredRecord(
+  t: TenantRef,
+  mode: BtMode,
+  record: Record<string, unknown>,
+): Promise<string> {
+  const enriched = { ...record, logged_at: record.logged_at ?? new Date().toISOString() };
+  return appendTo(consideredCol(t, mode), enriched, 'considered_id');
+}
+
+export async function listConsideredRecords(
+  t: TenantRef,
+  mode: BtMode,
+  opts: { since?: string; limit?: number } = {},
+): Promise<Record<string, unknown>[]> {
+  let q = consideredCol(t, mode).orderBy('logged_at', 'desc');
+  if (opts.since) q = q.where('logged_at', '>=', opts.since);
+  q = q.limit(Math.min(opts.limit ?? 500, 5000));
+  const snap = await q.get();
+  return snap.docs.map((d) => d.data() as Record<string, unknown>);
+}
+
+/** Daily market snapshot archive. `date` is the doc id (e.g. "2026-04-21"). */
+export async function saveMarketSnapshot(
+  t: TenantRef,
+  mode: BtMode,
+  date: string,
+  snapshot: unknown,
+): Promise<void> {
+  await snapshotsCol(t, mode).doc(date).set({
+    date,
+    snapshot,
+    saved_at: new Date().toISOString(),
+  });
+}
+
+export async function getMarketSnapshot(
+  t: TenantRef,
+  mode: BtMode,
+  date: string,
+): Promise<Record<string, unknown> | null> {
+  const snap = await snapshotsCol(t, mode).doc(date).get();
+  return snap.exists ? (snap.data() as Record<string, unknown>) : null;
+}
+
+export async function listMarketSnapshots(
+  t: TenantRef,
+  mode: BtMode,
+  opts: { from?: string; to?: string; limit?: number } = {},
+): Promise<Record<string, unknown>[]> {
+  let q = snapshotsCol(t, mode).orderBy('date', 'desc');
+  if (opts.from) q = q.where('date', '>=', opts.from);
+  if (opts.to) q = q.where('date', '<=', opts.to);
+  q = q.limit(Math.min(opts.limit ?? 90, 365));
+  const snap = await q.get();
+  return snap.docs.map((d) => d.data() as Record<string, unknown>);
 }
