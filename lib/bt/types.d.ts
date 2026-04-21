@@ -63,8 +63,13 @@ declare module '@bogdanripa/bt-trade' {
     getAvailableTypes(portfolioKey: string): Promise<unknown>;
   }
 
+  export interface BtProfile {
+    selectedPortfolioPanelCurrencyID: string;
+    [key: string]: unknown;
+  }
+
   export interface ProfileApi {
-    get(opts?: { device?: string }): Promise<unknown>;
+    get(opts?: { device?: string }): Promise<BtProfile>;
   }
 
   export interface MarketsApi {
