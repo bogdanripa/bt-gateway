@@ -149,6 +149,9 @@ function db(): Firestore {
         process.env.FIREBASE_PROJECT_ID ??
         process.env.GOOGLE_CLOUD_PROJECT ??
         'auto-trader-493814',
+      // Optional fields (e.g. displayName) may be undefined when the Firebase
+      // user hasn't set them. Silently drop them instead of throwing.
+      ignoreUndefinedProperties: true,
     });
   }
   return dbInstance;
