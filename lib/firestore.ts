@@ -65,6 +65,7 @@ export interface EventDoc {
   type:
     | 'signin.success'
     | 'signin.failure'
+    | 'signin.restored'
     | 'refresh.success'
     | 'refresh.failure'
     | 'logout'

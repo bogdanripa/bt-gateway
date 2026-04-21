@@ -153,6 +153,16 @@ async function buildClient(t: TenantRef, mode: BtMode): Promise<PoolEntry> {
   if (existing?.snapshot) {
     try {
       client.restore(existing.snapshot as SessionSnapshot);
+      // Log the restore so the user can see session activity in the audit feed.
+      // Fire-and-forget — no need to block the request on this write.
+      void audit({
+        tenant: t,
+        type: 'signin.restored',
+        actor: 'system',
+        mode,
+        status: 'ok',
+        detail: { username },
+      });
       return { client, username };
     } catch (e) {
       // Stale snapshot shape — fall through to full login.

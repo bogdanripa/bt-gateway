@@ -19,7 +19,7 @@ interface EventRow {
   ts: string;
 }
 
-const ROUTINE_TYPES = new Set(['refresh.success', 'refresh.failure']);
+const ROUTINE_TYPES = new Set(['refresh.success', 'refresh.failure', 'signin.restored']);
 
 export function AuditFeed() {
   const [rows, setRows] = useState<EventRow[]>([]);
@@ -69,7 +69,11 @@ export function AuditFeed() {
       {loading ? (
         <p className="dim">Loading…</p>
       ) : filtered.length === 0 ? (
-        <p className="dim">No events yet. Activity from your trading scripts and UI actions will appear here.</p>
+        <p className="dim">
+          {rows.length === 0
+            ? 'No events yet. Activity from your trading scripts and UI actions will appear here.'
+            : `${rows.length} routine refresh event${rows.length === 1 ? '' : 's'} hidden — tick "Show routine refreshes" above to see them.`}
+        </p>
       ) : (
         <table>
           <thead>
