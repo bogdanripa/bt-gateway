@@ -47,6 +47,28 @@ export interface BtSessionDoc {
   updatedAt: string;
 }
 
+/**
+ * Per-axis include/exclude lists. Semantics: `include` acts as an allowlist
+ * (empty = no constraint); `exclude` is a deny-list applied after include.
+ * Matching is case-insensitive and uses the raw string value as returned by
+ * BT (market code, currency code, instrument symbol).
+ */
+export interface FilterAxis {
+  include: string[];
+  exclude: string[];
+}
+
+/**
+ * Optional per-API-key filters. Each axis restricts what the key can see or
+ * mutate across every /api/v1/* endpoint. An absent `filters` field (legacy
+ * keys) means no restrictions.
+ */
+export interface ApiKeyFilters {
+  markets: FilterAxis;
+  currencies: FilterAxis;
+  stocks: FilterAxis;
+}
+
 /** API key — hash only, prefix visible, mode-scoped. */
 export interface ApiKeyDoc {
   /** First 12 chars of the full key, e.g. "bvb_demo_AbC" — shown in UI for identification. */
@@ -58,6 +80,8 @@ export interface ApiKeyDoc {
   createdAt: string;
   lastUsedAt?: string;
   revokedAt?: string;
+  /** Per-axis include/exclude filters. Optional; older keys won't have it. */
+  filters?: ApiKeyFilters;
 }
 
 /** Audit log entry — only mutating events land here. Reads do not. */
@@ -74,6 +98,7 @@ export interface EventDoc {
     | 'order.rejected'
     | 'creds.updated'
     | 'apikey.created'
+    | 'apikey.updated'
     | 'apikey.revoked'
     | 'telegram.linked'
     | 'telegram.unlinked';
@@ -309,6 +334,14 @@ export async function listApiKeys(t: TenantRef): Promise<Array<ApiKeyDoc & { id:
 
 export async function revokeApiKey(t: TenantRef, id: string): Promise<void> {
   await apiKeysCol(t).doc(id).set({ revokedAt: new Date().toISOString() }, { merge: true });
+}
+
+export async function updateApiKeyFilters(
+  t: TenantRef,
+  id: string,
+  filters: ApiKeyFilters,
+): Promise<void> {
+  await apiKeysCol(t).doc(id).set({ filters }, { merge: true });
 }
 
 export async function touchApiKey(t: TenantRef, id: string): Promise<void> {

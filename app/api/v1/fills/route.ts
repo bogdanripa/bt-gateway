@@ -11,6 +11,7 @@ import { requireApiKey } from '@/lib/auth/api-key';
 import { appendFillRecord, listFillRecords } from '@/lib/firestore';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
+import { assertAllowed, filterRecords, readRecordFields } from '@/lib/filters';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,6 +25,7 @@ export const POST = withRoute(async (req) => {
     throw new ApiError('BAD_REQUEST', 'Body must be a JSON object');
   }
   const record = body as Record<string, unknown>;
+  assertAllowed(caller.filters, readRecordFields(record));
   if (typeof record.filled_at !== 'string' || !record.filled_at) {
     record.filled_at = new Date().toISOString();
   }
@@ -38,5 +40,5 @@ export const GET = withRoute(async (req) => {
     since: sp.get('since') ?? undefined,
     limit: sp.get('limit') ? Number(sp.get('limit')) : undefined,
   });
-  return ok({ mode: caller.mode, records });
+  return ok({ mode: caller.mode, records: filterRecords(records, caller.filters, readRecordFields) });
 });

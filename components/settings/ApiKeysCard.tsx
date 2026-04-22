@@ -1,15 +1,15 @@
 /**
  * API keys management. Lists existing keys (prefix/label/mode/status),
- * lets the user create new ones (showing the raw key exactly once), and
- * revoke any key.
+ * lets the user create new ones (showing the raw key exactly once), revoke
+ * any key, and edit per-key filters (markets / currencies / stocks with
+ * include + exclude lists).
  */
 
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { uiFetch } from '@/lib/ui-client';
-
-type Mode = 'demo' | 'live';
+import { EMPTY_FILTERS, FilterEditor, type Filters, type Mode } from './FilterEditor';
 
 interface KeyRow {
   id: string;
@@ -19,6 +19,37 @@ interface KeyRow {
   createdAt: string;
   lastUsedAt?: string;
   revokedAt?: string;
+  filters?: Filters;
+}
+
+function cloneFilters(f: Filters | undefined): Filters {
+  if (!f) return { markets: { include: [], exclude: [] }, currencies: { include: [], exclude: [] }, stocks: { include: [], exclude: [] } };
+  return {
+    markets: { include: [...f.markets.include], exclude: [...f.markets.exclude] },
+    currencies: { include: [...f.currencies.include], exclude: [...f.currencies.exclude] },
+    stocks: { include: [...f.stocks.include], exclude: [...f.stocks.exclude] },
+  };
+}
+
+function hasAnyFilter(f: Filters | undefined): boolean {
+  if (!f) return false;
+  return (
+    f.markets.include.length + f.markets.exclude.length +
+    f.currencies.include.length + f.currencies.exclude.length +
+    f.stocks.include.length + f.stocks.exclude.length
+  ) > 0;
+}
+
+function summarizeFilters(f: Filters | undefined): string {
+  if (!f || !hasAnyFilter(f)) return 'unrestricted';
+  const parts: string[] = [];
+  const axes: [string, keyof Filters][] = [['mkt', 'markets'], ['ccy', 'currencies'], ['sym', 'stocks']];
+  for (const [short, key] of axes) {
+    const a = f[key];
+    if (a.include.length) parts.push(`${short}∈[${a.include.slice(0, 3).join(',')}${a.include.length > 3 ? '…' : ''}]`);
+    if (a.exclude.length) parts.push(`${short}∉[${a.exclude.slice(0, 3).join(',')}${a.exclude.length > 3 ? '…' : ''}]`);
+  }
+  return parts.join(' ');
 }
 
 export function ApiKeysCard() {
@@ -26,9 +57,14 @@ export function ApiKeysCard() {
   const [loading, setLoading] = useState(true);
   const [mode, setMode] = useState<Mode>('demo');
   const [label, setLabel] = useState('');
+  const [createFilters, setCreateFilters] = useState<Filters>(() => cloneFilters(EMPTY_FILTERS));
+  const [showCreateFilters, setShowCreateFilters] = useState(false);
   const [freshKey, setFreshKey] = useState<{ key: string; prefix: string; mode: Mode } | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingFilters, setEditingFilters] = useState<Filters>(() => cloneFilters(EMPTY_FILTERS));
+  const [editingMode, setEditingMode] = useState<Mode>('demo');
 
   async function refresh() {
     setLoading(true);
@@ -50,10 +86,16 @@ export function ApiKeysCard() {
     try {
       const res = await uiFetch<{ key: string; prefix: string; mode: Mode }>('/api/ui/keys', {
         method: 'POST',
-        body: JSON.stringify({ mode, label }),
+        body: JSON.stringify({
+          mode,
+          label,
+          ...(hasAnyFilter(createFilters) ? { filters: createFilters } : {}),
+        }),
       });
       setFreshKey({ key: res.key, prefix: res.prefix, mode: res.mode });
       setLabel('');
+      setCreateFilters(cloneFilters(EMPTY_FILTERS));
+      setShowCreateFilters(false);
       await refresh();
     } catch (e) {
       setErr((e as Error).message);
@@ -76,13 +118,44 @@ export function ApiKeysCard() {
     }
   }
 
+  function startEdit(row: KeyRow) {
+    setEditingId(row.id);
+    setEditingMode(row.mode);
+    setEditingFilters(cloneFilters(row.filters));
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setEditingFilters(cloneFilters(EMPTY_FILTERS));
+  }
+
+  async function saveEdit() {
+    if (!editingId) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await uiFetch(`/api/ui/keys/${editingId}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ filters: editingFilters }),
+      });
+      setEditingId(null);
+      await refresh();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="card">
       <h2>API keys</h2>
       <p className="dim">
         Use these in your trading scripts: <span className="mono">Authorization: Bearer &lt;key&gt;</span>.
         Mode is fixed per key — a <span className="pill demo">demo</span> key can only hit
-        demo endpoints; a <span className="pill live">live</span> key only live.
+        demo endpoints; a <span className="pill live">live</span> key only live. Optional
+        filters restrict what each key can see or act on: narrow by market (e.g. BVB),
+        currency (e.g. RON), or individual stock symbols.
       </p>
 
       {err && <div className="notice err">{err}</div>}
@@ -96,7 +169,7 @@ export function ApiKeysCard() {
         </div>
       )}
 
-      <div className="row" style={{ marginBottom: '1rem', alignItems: 'end' }}>
+      <div className="row" style={{ marginBottom: '0.5rem', alignItems: 'end' }}>
         <div>
           <label>Mode</label>
           <select value={mode} onChange={(e) => setMode(e.target.value as Mode)}>
@@ -113,11 +186,30 @@ export function ApiKeysCard() {
           />
         </div>
         <div style={{ flex: 'none' }}>
+          <button
+            className="ghost"
+            type="button"
+            onClick={() => setShowCreateFilters((v) => !v)}
+          >
+            {showCreateFilters ? 'Hide filters' : hasAnyFilter(createFilters) ? 'Edit filters' : 'Add filters'}
+          </button>
+        </div>
+        <div style={{ flex: 'none' }}>
           <button onClick={() => { void create(); }} disabled={busy || !label.trim()}>
             Create key
           </button>
         </div>
       </div>
+
+      {showCreateFilters && (
+        <div style={{ marginBottom: '1rem' }}>
+          <FilterEditor
+            mode={mode}
+            filters={createFilters}
+            onChange={setCreateFilters}
+          />
+        </div>
+      )}
 
       {loading ? (
         <p className="dim">Loading…</p>
@@ -130,6 +222,7 @@ export function ApiKeysCard() {
               <th>Label</th>
               <th>Mode</th>
               <th>Prefix</th>
+              <th>Filters</th>
               <th>Created</th>
               <th>Last used</th>
               <th>Status</th>
@@ -138,25 +231,56 @@ export function ApiKeysCard() {
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.id}>
-                <td>{r.label}</td>
-                <td><span className={`pill ${r.mode}`}>{r.mode}</span></td>
-                <td className="mono">{r.prefix}…</td>
-                <td className="dim mono">{r.createdAt.slice(0, 10)}</td>
-                <td className="dim mono">{r.lastUsedAt?.slice(0, 16).replace('T', ' ') ?? '—'}</td>
-                <td>
-                  {r.revokedAt
-                    ? <span className="pill err">revoked</span>
-                    : <span className="pill ok">active</span>}
-                </td>
-                <td>
-                  {!r.revokedAt && (
-                    <button className="ghost" onClick={() => { void revoke(r.id); }} disabled={busy}>
-                      Revoke
-                    </button>
-                  )}
-                </td>
-              </tr>
+              <Fragment key={r.id}>
+                <tr>
+                  <td>{r.label}</td>
+                  <td><span className={`pill ${r.mode}`}>{r.mode}</span></td>
+                  <td className="mono">{r.prefix}…</td>
+                  <td className="mono dim" style={{ fontSize: '0.8rem', maxWidth: 260 }}>
+                    {summarizeFilters(r.filters)}
+                  </td>
+                  <td className="dim mono">{r.createdAt.slice(0, 10)}</td>
+                  <td className="dim mono">{r.lastUsedAt?.slice(0, 16).replace('T', ' ') ?? '—'}</td>
+                  <td>
+                    {r.revokedAt
+                      ? <span className="pill err">revoked</span>
+                      : <span className="pill ok">active</span>}
+                  </td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    {!r.revokedAt && (
+                      <>
+                        <button
+                          className="ghost"
+                          onClick={() => (editingId === r.id ? cancelEdit() : startEdit(r))}
+                          disabled={busy}
+                          style={{ marginRight: '0.25rem' }}
+                        >
+                          {editingId === r.id ? 'Close' : 'Filters'}
+                        </button>
+                        <button className="ghost" onClick={() => { void revoke(r.id); }} disabled={busy}>
+                          Revoke
+                        </button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+                {editingId === r.id && (
+                  <tr>
+                    <td colSpan={8} style={{ background: 'var(--card-inner-bg, rgba(128,128,128,0.05))' }}>
+                      <FilterEditor
+                        mode={editingMode}
+                        filters={editingFilters}
+                        onChange={setEditingFilters}
+                        embedded
+                      />
+                      <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
+                        <button className="ghost" onClick={cancelEdit} disabled={busy}>Cancel</button>
+                        <button onClick={() => { void saveEdit(); }} disabled={busy}>Save filters</button>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             ))}
           </tbody>
         </table>

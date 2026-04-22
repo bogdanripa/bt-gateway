@@ -11,6 +11,7 @@ import { requireApiKey } from '@/lib/auth/api-key';
 import { appendConsideredRecord, listConsideredRecords } from '@/lib/firestore';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
+import { assertAllowed, filterRecords, readRecordFields } from '@/lib/filters';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -23,11 +24,9 @@ export const POST = withRoute(async (req) => {
   if (!body || typeof body !== 'object' || Array.isArray(body)) {
     throw new ApiError('BAD_REQUEST', 'Body must be a JSON object');
   }
-  const id = await appendConsideredRecord(
-    caller.tenant,
-    caller.mode,
-    body as Record<string, unknown>,
-  );
+  const record = body as Record<string, unknown>;
+  assertAllowed(caller.filters, readRecordFields(record));
+  const id = await appendConsideredRecord(caller.tenant, caller.mode, record);
   return ok({ mode: caller.mode, id });
 });
 
@@ -38,5 +37,5 @@ export const GET = withRoute(async (req) => {
     since: sp.get('since') ?? undefined,
     limit: sp.get('limit') ? Number(sp.get('limit')) : undefined,
   });
-  return ok({ mode: caller.mode, records });
+  return ok({ mode: caller.mode, records: filterRecords(records, caller.filters, readRecordFields) });
 });

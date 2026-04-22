@@ -32,6 +32,7 @@ import { getPortfolioKey } from '@/lib/bt/portfolio-key';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
 import { audit } from '@/lib/events';
+import { assertAllowed, filterRecords, readRecordFields } from '@/lib/filters';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -60,19 +61,26 @@ export const POST = withRoute(async (req, { requestId }) => {
     throw new ApiError('BAD_REQUEST', 'price is required for non-market orders');
   }
 
+  // Up-front check on symbol; market gets checked again once resolved.
+  const symbolUp = args.symbol.toUpperCase();
+  assertAllowed(caller.filters, { symbol: symbolUp });
+
   const client = await getBtClient(caller.tenant, caller.mode);
   const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
 
   let marketId = args.marketId;
-  let symbol = args.symbol.toUpperCase();
+  let symbol = symbolUp;
   if (!marketId) {
     const hits = await client.markets.searchInstrument(symbol).catch((e) => {
       throw new ApiError('UPSTREAM_UNAVAILABLE', `searchInstrument: ${(e as Error).message}`);
     });
-    const first = hits[0] as { code?: string; marketId?: string | number } | undefined;
+    const first = hits[0] as
+      | { code?: string; marketId?: string | number; market?: string; currency?: string }
+      | undefined;
     if (!first?.marketId) throw new ApiError('NOT_FOUND', `Instrument not found: ${symbol}`);
     marketId = first.marketId;
     symbol = first.code ?? symbol;
+    assertAllowed(caller.filters, { symbol, market: first.market, currency: first.currency });
   }
 
   try {
@@ -133,18 +141,32 @@ export const GET = withRoute(async (req) => {
   const statuses = statusesRaw ? statusesRaw.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
   const sideRaw = sp.get('side');
   const side = sideRaw === 'buy' || sideRaw === 'sell' ? sideRaw : undefined;
+  const symbolParam = sp.get('symbol') ?? undefined;
+
+  // If the caller narrowed by symbol, reject when that symbol isn't allowed
+  // rather than silently returning [].
+  if (symbolParam) assertAllowed(caller.filters, { symbol: symbolParam });
 
   try {
-    const orders = await client.orders.search({
+    let orders = await client.orders.search({
       portfolioKey,
       statuses,
       side,
-      symbol: sp.get('symbol') ?? undefined,
+      symbol: symbolParam,
       startDate: sp.get('startDate') ?? undefined,
       endDate: sp.get('endDate') ?? undefined,
     });
+    if (Array.isArray(orders)) {
+      orders = filterRecords(orders as unknown[], caller.filters, readRecordFields);
+    } else if (orders && typeof orders === 'object') {
+      const obj = orders as Record<string, unknown>;
+      if (Array.isArray(obj.items)) {
+        obj.items = filterRecords(obj.items as unknown[], caller.filters, readRecordFields);
+      }
+    }
     return ok({ mode: caller.mode, orders });
   } catch (e) {
+    if (e instanceof ApiError) throw e;
     throw new ApiError('UPSTREAM_UNAVAILABLE', `orders.search failed: ${(e as Error).message}`);
   }
 });

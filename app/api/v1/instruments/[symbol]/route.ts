@@ -14,6 +14,7 @@ import { getBtClient } from '@/lib/bt/client-pool';
 import { getPortfolioKey } from '@/lib/bt/portfolio-key';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
+import { assertAllowed, readRecordFields } from '@/lib/filters';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,6 +27,9 @@ export const GET = withRoute<{ symbol: string }>(async (req, { params }) => {
   const symbol = params.symbol?.toUpperCase();
   if (!symbol) throw new ApiError('BAD_REQUEST', 'symbol path segment required');
 
+  // Reject before touching BT when the symbol alone is enough to tell.
+  assertAllowed(caller.filters, { symbol });
+
   const overrideMarketId = req.nextUrl.searchParams.get('marketId');
 
   let hits: unknown[];
@@ -37,12 +41,14 @@ export const GET = withRoute<{ symbol: string }>(async (req, { params }) => {
   if (!hits.length) throw new ApiError('NOT_FOUND', `Instrument not found: ${symbol}`);
 
   // Pick the caller-specified marketId, or the first hit.
-  const first = hits[0] as { code?: string; marketId?: string | number };
+  const first = hits[0] as { code?: string; marketId?: string | number; market?: string };
   const marketId = overrideMarketId ?? first.marketId;
   const code = first.code ?? symbol;
   if (!marketId) {
     throw new ApiError('UPSTREAM_UNAVAILABLE', 'searchInstrument hit missing marketId');
   }
+  // Now that the market is resolved, check it too.
+  assertAllowed(caller.filters, { market: first.market, symbol: code });
 
   try {
     const instrument = await client.markets.getInstrument({
@@ -50,8 +56,13 @@ export const GET = withRoute<{ symbol: string }>(async (req, { params }) => {
       code,
       marketId,
     });
+    // Belt-and-braces: the instrument payload may carry a currency field;
+    // reject if filtered out.
+    const fields = readRecordFields(instrument);
+    assertAllowed(caller.filters, fields);
     return ok({ mode: caller.mode, symbol: code, marketId, instrument });
   } catch (e) {
+    if (e instanceof ApiError) throw e;
     throw new ApiError('UPSTREAM_UNAVAILABLE', `getInstrument failed: ${(e as Error).message}`);
   }
 });

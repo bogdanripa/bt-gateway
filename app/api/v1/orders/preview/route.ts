@@ -21,6 +21,7 @@ import { getBtClient } from '@/lib/bt/client-pool';
 import { getPortfolioKey } from '@/lib/bt/portfolio-key';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
+import { assertAllowed } from '@/lib/filters';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -45,20 +46,27 @@ export const POST = withRoute(async (req) => {
   }
   const args = parsed.data;
 
+  // Reject up-front if the requested symbol is filtered out.
+  const symbolUp = args.symbol.toUpperCase();
+  assertAllowed(caller.filters, { symbol: symbolUp });
+
   const client = await getBtClient(caller.tenant, caller.mode);
   const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
 
   // Resolve marketId if not given.
   let marketId = args.marketId;
-  let symbol = args.symbol.toUpperCase();
+  let symbol = symbolUp;
   if (!marketId) {
     const hits = await client.markets.searchInstrument(symbol).catch((e) => {
       throw new ApiError('UPSTREAM_UNAVAILABLE', `searchInstrument: ${(e as Error).message}`);
     });
-    const first = hits[0] as { code?: string; marketId?: string | number } | undefined;
+    const first = hits[0] as
+      | { code?: string; marketId?: string | number; market?: string; currency?: string }
+      | undefined;
     if (!first?.marketId) throw new ApiError('NOT_FOUND', `Instrument not found: ${symbol}`);
     marketId = first.marketId;
     symbol = first.code ?? symbol;
+    assertAllowed(caller.filters, { symbol, market: first.market, currency: first.currency });
   }
 
   try {

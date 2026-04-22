@@ -21,6 +21,7 @@ import { ApiError } from '../errors';
 import {
   listApiKeys,
   touchApiKey,
+  type ApiKeyFilters,
   type BtMode,
   type TenantRef,
   tenantFromAuthedUid,
@@ -87,6 +88,8 @@ export interface AuthenticatedCaller {
   tenant: TenantRef;
   mode: BtMode;
   keyId: string;
+  /** Per-key filters. Undefined for keys created before the feature shipped. */
+  filters?: ApiKeyFilters;
 }
 
 /**
@@ -115,6 +118,7 @@ export async function authenticateApiKey(raw: string): Promise<AuthenticatedCall
       hash: string;
       mode: BtMode;
       revokedAt?: string;
+      filters?: ApiKeyFilters;
     };
     if (data.mode !== mode) continue;
     if (data.revokedAt) continue;
@@ -138,7 +142,7 @@ export async function authenticateApiKey(raw: string): Promise<AuthenticatedCall
     // would add ~50ms to every authed call; we don't need it to block.
     void touchApiKey(tenant, kid).catch(() => { /* swallow */ });
 
-    return { tenant, mode, keyId: kid };
+    return { tenant, mode, keyId: kid, filters: data.filters };
   }
 
   throw new ApiError('UNAUTHORIZED', 'API key not recognized');

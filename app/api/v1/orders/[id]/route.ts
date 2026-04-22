@@ -18,6 +18,7 @@ import { requireApiKey } from '@/lib/auth/api-key';
 import { getBtClient } from '@/lib/bt/client-pool';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
+import { assertAllowed, readRecordFields } from '@/lib/filters';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -35,8 +36,11 @@ export const GET = withRoute<{ id: string }>(async (req, { params }) => {
       client.orders.getHistory(id).catch(() => null),
       client.orders.getActions(id).catch(() => null),
     ]);
+    // Hide orders that belong to an axis the key can't see.
+    assertAllowed(caller.filters, readRecordFields(order));
     return ok({ mode: caller.mode, order, history, actions });
   } catch (e) {
+    if (e instanceof ApiError) throw e;
     throw new ApiError('UPSTREAM_UNAVAILABLE', `orders.get failed: ${(e as Error).message}`);
   }
 });
