@@ -160,8 +160,18 @@ export const GET = withRoute(async (req) => {
       orders = filterRecords(orders as unknown[], caller.filters, readRecordFields);
     } else if (orders && typeof orders === 'object') {
       const obj = orders as Record<string, unknown>;
-      if (Array.isArray(obj.items)) {
-        obj.items = filterRecords(obj.items as unknown[], caller.filters, readRecordFields);
+      // bt-trade's Orders/Search returns PaginatedResult<Order> =
+      // { Items: Order[], Page, PageSize, TotalItemCount }. Cover both the
+      // PascalCase (real) and lowercase (legacy / defensive) item keys, and
+      // keep TotalItemCount in sync with the filtered length.
+      const itemsKey = Array.isArray(obj.Items) ? 'Items'
+        : Array.isArray(obj.items) ? 'items'
+        : null;
+      if (itemsKey) {
+        const filtered = filterRecords(obj[itemsKey] as unknown[], caller.filters, readRecordFields);
+        obj[itemsKey] = filtered;
+        if (typeof obj.TotalItemCount === 'number') obj.TotalItemCount = filtered.length;
+        else if (typeof obj.totalItemCount === 'number') obj.totalItemCount = filtered.length;
       }
     }
     return ok({ mode: caller.mode, orders });
