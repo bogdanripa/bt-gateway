@@ -28,6 +28,7 @@
 import { z } from 'zod';
 import { requireApiKey } from '@/lib/auth/api-key';
 import { runWithSession } from '@/lib/bt/client-pool';
+import { getMarketsCache } from '@/lib/bt/markets-cache';
 import { getPortfolioKey } from '@/lib/bt/portfolio-key';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
@@ -163,19 +164,30 @@ export const GET = withRoute(async (req) => {
   if (symbolParam) assertAllowed(caller.filters, { symbol: symbolParam });
 
   try {
-    let orders = await runWithSession(caller.tenant, caller.mode, async (client) => {
-      const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
-      return client.orders.search({
-        portfolioKey,
-        statuses,
-        side,
-        symbol: symbolParam,
-        startDate: sp.get('startDate') ?? undefined,
-        endDate: sp.get('endDate') ?? undefined,
-      });
-    });
+    const { orders: rawOrders, marketsCache } = await runWithSession(
+      caller.tenant,
+      caller.mode,
+      async (client) => {
+        const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
+        const [o, mc] = await Promise.all([
+          client.orders.search({
+            portfolioKey,
+            statuses,
+            side,
+            symbol: symbolParam,
+            startDate: sp.get('startDate') ?? undefined,
+            endDate: sp.get('endDate') ?? undefined,
+          }),
+          getMarketsCache(caller.tenant, caller.mode, client),
+        ]);
+        return { orders: o, marketsCache: mc };
+      },
+    );
+
+    const read = (r: unknown) => readRecordFields(r, { marketsCache });
+    let orders: unknown = rawOrders;
     if (Array.isArray(orders)) {
-      orders = filterRecords(orders as unknown[], caller.filters, readRecordFields);
+      orders = filterRecords(orders as unknown[], caller.filters, read);
     } else if (orders && typeof orders === 'object') {
       const obj = orders as Record<string, unknown>;
       // bt-trade's Orders/Search returns PaginatedResult<Order> =
@@ -186,7 +198,7 @@ export const GET = withRoute(async (req) => {
         : Array.isArray(obj.items) ? 'items'
         : null;
       if (itemsKey) {
-        const filtered = filterRecords(obj[itemsKey] as unknown[], caller.filters, readRecordFields);
+        const filtered = filterRecords(obj[itemsKey] as unknown[], caller.filters, read);
         obj[itemsKey] = filtered;
         if (typeof obj.TotalItemCount === 'number') obj.TotalItemCount = filtered.length;
         else if (typeof obj.totalItemCount === 'number') obj.totalItemCount = filtered.length;

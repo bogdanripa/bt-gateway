@@ -169,8 +169,23 @@ const MARKET_KEYS = ['market', 'Market', 'marketCode', 'MarketCode', 'exchange',
 const CURRENCY_KEYS = ['currency', 'Currency', 'currencyId', 'CurrencyId', 'currencyCode', 'CurrencyCode', 'ccy', 'Ccy'];
 const NESTED_CONTAINERS = ['value', 'Value', 'security', 'Security', 'instrument', 'Instrument', 'securityInfo', 'SecurityInfo'];
 
+const MARKET_ID_KEYS = ['MarketId', 'marketId', 'ExchangeId', 'exchangeId'];
+
+function pickNumber(o: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const k of keys) {
+    const v = o[k];
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    if (typeof v === 'string' && v.trim()) {
+      const n = Number(v);
+      if (Number.isFinite(n)) return n;
+    }
+  }
+  return undefined;
+}
+
 export function readRecordFields(
   r: unknown,
+  opts?: { marketsCache?: Map<number, string> },
 ): { market?: string; currency?: string; symbol?: string } {
   if (!r || typeof r !== 'object') return {};
   const o = r as Record<string, unknown>;
@@ -193,8 +208,23 @@ export function readRecordFields(
     }
     return undefined;
   };
+
+  // Prefer the canonical exchange name from the markets cache when a
+  // MarketId/ExchangeId is on the record. BT sometimes surfaces a
+  // segment-level code on `Market` (e.g. "REGS" for the BVB regulated-market
+  // segment) while the user-configured filter is the parent exchange code
+  // ("BVB"). MarketId is stable across segments.
+  let market = pickAny(MARKET_KEYS);
+  if (opts?.marketsCache) {
+    const mid = pickNumber(o, MARKET_ID_KEYS);
+    if (mid !== undefined) {
+      const canonical = opts.marketsCache.get(mid);
+      if (canonical) market = canonical;
+    }
+  }
+
   return {
-    market: pickAny(MARKET_KEYS),
+    market,
     currency: pickAny(CURRENCY_KEYS),
     symbol: pickAny(SYMBOL_KEYS),
   };
@@ -230,20 +260,26 @@ export function readRecordFields(
  * Mutates the input in place — callers pass the just-received BT response so
  * there's no shared state to worry about.
  */
-export function filterBtHoldings(payload: unknown, filters: ApiKeyFilters | undefined): unknown {
+export function filterBtHoldings(
+  payload: unknown,
+  filters: ApiKeyFilters | undefined,
+  marketsCache?: Map<number, string>,
+): unknown {
   if (!filters || !payload || typeof payload !== 'object') return payload;
   const root = payload as Record<string, unknown>;
 
+  const read = (r: unknown) => readRecordFields(r, { marketsCache });
+
   // (1) The real positions at Positions.Items. bt-trade@0.3.1+ puts Market,
-  // Currency, MarketId, CurrencyId directly on each PositionItem, so
-  // readRecordFields (which probes Currency/Market in its PascalCase lists)
-  // resolves all three axes without any extra lookup.
+  // Currency, MarketId, CurrencyId directly on each PositionItem. We pass the
+  // markets cache so readRecordFields can canonicalize BT's sometimes-segment-
+  // level Market string (e.g. "REGS" → "BVB") before comparison.
   const positions = root['Positions'] ?? root['positions'];
   if (positions && typeof positions === 'object') {
     const pp = positions as Record<string, unknown>;
     const itemsKey = 'Items' in pp ? 'Items' : 'items' in pp ? 'items' : null;
     if (itemsKey && Array.isArray(pp[itemsKey])) {
-      const filtered = filterRecords(pp[itemsKey] as unknown[], filters, readRecordFields);
+      const filtered = filterRecords(pp[itemsKey] as unknown[], filters, read);
       pp[itemsKey] = filtered;
       if (typeof pp.TotalItemCount === 'number') pp.TotalItemCount = filtered.length;
       else if (typeof pp.totalItemCount === 'number') pp.totalItemCount = filtered.length;
@@ -261,7 +297,7 @@ export function filterBtHoldings(payload: unknown, filters: ApiKeyFilters | unde
       if (sumKey && Array.isArray(t[sumKey])) {
         const kept: unknown[] = [];
         for (const pos of t[sumKey] as unknown[]) {
-          const next = filterPosition(pos, filters);
+          const next = filterPosition(pos, filters, marketsCache);
           if (next !== null) kept.push(next);
         }
         t[sumKey] = kept;
@@ -298,7 +334,11 @@ export function filterBtHoldings(payload: unknown, filters: ApiKeyFilters | unde
   return payload;
 }
 
-function filterPosition(pos: unknown, filters: ApiKeyFilters): unknown | null {
+function filterPosition(
+  pos: unknown,
+  filters: ApiKeyFilters,
+  marketsCache?: Map<number, string>,
+): unknown | null {
   if (!pos || typeof pos !== 'object') return pos;
   const p = pos as Record<string, unknown>;
   const assetType = (typeof p.AssetType === 'string' ? p.AssetType
@@ -321,7 +361,7 @@ function filterPosition(pos: unknown, filters: ApiKeyFilters): unknown | null {
   // PositionSummary aggregates (e.g. per-asset-type totals). The identifying
   // ticker lives on a field called `Ticker` per bt-trade's PositionSummary
   // typedef. readRecordFields covers that via the SYMBOL_KEYS list.
-  const fields = readRecordFields(p);
+  const fields = readRecordFields(p, { marketsCache });
   if (!isAllowedOn(filters, 'markets', fields.market ?? null)) return null;
   if (!isAllowedOn(filters, 'currencies', fields.currency ?? null)) return null;
   if (!isAllowedOn(filters, 'stocks', fields.symbol ?? null)) return null;

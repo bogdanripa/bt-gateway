@@ -9,6 +9,7 @@
 
 import { requireApiKey } from '@/lib/auth/api-key';
 import { runWithSession } from '@/lib/bt/client-pool';
+import { getMarketsCache } from '@/lib/bt/markets-cache';
 import { getPortfolioKey } from '@/lib/bt/portfolio-key';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
@@ -29,12 +30,22 @@ export const GET = withRoute(async (req) => {
 
   let portfolioKey: string;
   let holdings: unknown;
+  let marketsCache: Map<number, string> | undefined;
   try {
-    ({ portfolioKey, holdings } = await runWithSession(caller.tenant, caller.mode, async (client) => {
-      const pk = await getPortfolioKey(caller.tenant, caller.mode, client);
-      const h = await client.portfolio.getHoldings({ portfolioKey: pk, market, endDate });
-      return { portfolioKey: pk, holdings: h };
-    }));
+    ({ portfolioKey, holdings, marketsCache } = await runWithSession(
+      caller.tenant,
+      caller.mode,
+      async (client) => {
+        const pk = await getPortfolioKey(caller.tenant, caller.mode, client);
+        // Fetch markets cache in parallel with holdings. Cache after first call,
+        // so subsequent hits only eat the getHoldings latency.
+        const [h, mc] = await Promise.all([
+          client.portfolio.getHoldings({ portfolioKey: pk, market, endDate }),
+          getMarketsCache(caller.tenant, caller.mode, client),
+        ]);
+        return { portfolioKey: pk, holdings: h, marketsCache: mc };
+      },
+    ));
   } catch (e) {
     if (e instanceof ApiError) throw e;
     throw new ApiError('UPSTREAM_UNAVAILABLE', `BT getHoldings failed: ${(e as Error).message}`, {
@@ -48,13 +59,15 @@ export const GET = withRoute(async (req) => {
   //   - bare array
   //   - { items: [...] }
   // filterBtHoldings handles the first case (and is a no-op on the others).
-  holdings = filterBtHoldings(holdings, caller.filters);
+  // The markets cache lets readRecordFields canonicalize "REGS" → "BVB" etc.
+  const read = (r: unknown) => readRecordFields(r, { marketsCache });
+  holdings = filterBtHoldings(holdings, caller.filters, marketsCache);
   if (Array.isArray(holdings)) {
-    holdings = filterRecords(holdings as unknown[], caller.filters, readRecordFields);
+    holdings = filterRecords(holdings as unknown[], caller.filters, read);
   } else if (holdings && typeof holdings === 'object') {
     const obj = holdings as Record<string, unknown>;
     if (Array.isArray(obj.items)) {
-      obj.items = filterRecords(obj.items as unknown[], caller.filters, readRecordFields);
+      obj.items = filterRecords(obj.items as unknown[], caller.filters, read);
     }
   }
 
