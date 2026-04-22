@@ -55,20 +55,33 @@ export const POST = withRoute(async (req) => {
   try {
     const { preview } = await runWithSession(caller.tenant, caller.mode, async (client) => {
       const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
-      if (!marketId) {
-        const hits = await client.markets.searchInstrument(symbol);
-        const first = hits[0] as
-          | { code?: string; marketId?: string | number; market?: string; currency?: string }
-          | undefined;
-        if (!first?.marketId) throw new ApiError('NOT_FOUND', `Instrument not found: ${symbol}`);
-        marketId = first.marketId;
-        symbol = first.code ?? symbol;
-        assertAllowed(caller.filters, { symbol, market: first.market, currency: first.currency });
+      // Always resolve via searchInstrument so the market + currency filter
+      // applies even when marketId is supplied explicitly.
+      const hits = await client.markets.searchInstrument(symbol);
+      if (!Array.isArray(hits) || hits.length === 0) {
+        throw new ApiError('NOT_FOUND', `Instrument not found: ${symbol}`);
       }
+      type Hit = { code?: string; marketId?: string | number; market?: string; currency?: string };
+      const pick = marketId
+        ? (hits as Hit[]).find((h) => String(h.marketId) === String(marketId))
+        : (hits[0] as Hit);
+      if (!pick) {
+        throw new ApiError(
+          'NOT_FOUND',
+          `Instrument ${symbol} not listed on marketId=${marketId}`,
+        );
+      }
+      if (!pick.marketId) {
+        throw new ApiError('UPSTREAM_UNAVAILABLE', 'searchInstrument hit missing marketId');
+      }
+      marketId = pick.marketId;
+      symbol = pick.code ?? symbol;
+      assertAllowed(caller.filters, { symbol, market: pick.market, currency: pick.currency });
+
       const p = await client.orders.preview({
         portfolioKey,
         symbol,
-        marketId: marketId!,
+        marketId,
         quantity: args.quantity ?? null,
         price: args.price,
         side: args.side,
