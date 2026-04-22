@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { uiFetch } from '@/lib/ui-client';
 import { useMode, type Mode } from './mode/ModeProvider';
 
@@ -24,6 +24,12 @@ interface BalanceEntry {
 
 interface Holding {
   symbol?: string;
+  /** Any of these may carry a human-readable instrument name. */
+  fullName?: string;
+  name?: string;
+  description?: string;
+  market?: string;
+  currency?: string;
   quantity?: number;
   averagePrice?: number;
   currentPrice?: number;
@@ -41,15 +47,20 @@ interface Snapshot {
   holdingsError?: string | null;
 }
 
-function formatRon(n: number | undefined): string {
-  if (n === undefined || n === null) return '—';
-  return n.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' RON';
+const N2 = { minimumFractionDigits: 2, maximumFractionDigits: 2 };
+const N4 = { minimumFractionDigits: 4, maximumFractionDigits: 4 };
+const nfRon = (n: number): string => n.toLocaleString('ro-RO', N2);
+const nfQty = (n: number): string => n.toLocaleString('ro-RO', { maximumFractionDigits: 4 });
+const nfPrice = (n: number): string => n.toLocaleString('ro-RO', N4);
+
+function formatMoney(n: number | undefined | null, currency = 'RON'): string {
+  if (n == null || !Number.isFinite(n)) return '—';
+  return `${nfRon(n)} ${currency}`;
 }
 
-function formatPct(pnl: number | undefined, cost: number | undefined): string {
-  if (!pnl || !cost || cost === 0) return '';
-  const pct = (pnl / cost) * 100;
-  return ` (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`;
+function nameOf(h: Holding): string | undefined {
+  const v = h.fullName ?? h.name ?? h.description;
+  return typeof v === 'string' && v.trim() ? v.trim() : undefined;
 }
 
 export function AccountSnapshot() {
@@ -59,8 +70,6 @@ export function AccountSnapshot() {
   const [err, setErr] = useState<string | null>(null);
   const [loadedAt, setLoadedAt] = useState<string | null>(null);
 
-  // Drop the snapshot when the global mode flips so the user doesn't see
-  // demo data with a "live" header for a flicker before the next load().
   useEffect(() => {
     setSnapshot(null);
     setErr(null);
@@ -73,7 +82,7 @@ export function AccountSnapshot() {
     try {
       const data = await uiFetch<Snapshot>(`/api/ui/account?mode=${mode}`);
       setSnapshot(data);
-      setLoadedAt(new Date().toLocaleTimeString('ro-RO'));
+      setLoadedAt(new Date().toLocaleTimeString());
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -81,11 +90,35 @@ export function AccountSnapshot() {
     }
   }
 
-  const holdings: Holding[] = snapshot && snapshot.holdings
+  const holdingsRaw: Holding[] = snapshot && snapshot.holdings
     ? Array.isArray(snapshot.holdings)
       ? snapshot.holdings
       : ((snapshot.holdings as { items?: Holding[] }).items ?? [])
     : [];
+
+  // Sort by market value desc; unknown values sink to the bottom.
+  const holdings = useMemo(
+    () => [...holdingsRaw].sort((a, b) => (b.marketValue ?? -Infinity) - (a.marketValue ?? -Infinity)),
+    [holdingsRaw],
+  );
+
+  const totalMv = useMemo(
+    () => holdings.reduce((acc, h) => acc + (typeof h.marketValue === 'number' ? h.marketValue : 0), 0),
+    [holdings],
+  );
+  const totalPnl = useMemo(
+    () => holdings.reduce((acc, h) => acc + (typeof h.unrealizedPnl === 'number' ? h.unrealizedPnl : 0), 0),
+    [holdings],
+  );
+  const totalCost = useMemo(
+    () => holdings.reduce((acc, h) => {
+      if (typeof h.averagePrice === 'number' && typeof h.quantity === 'number') {
+        return acc + h.averagePrice * h.quantity;
+      }
+      return acc;
+    }, 0),
+    [holdings],
+  );
 
   const cashEntries: BalanceEntry[] = Array.isArray(snapshot?.cash) ? snapshot!.cash! : [];
 
@@ -93,7 +126,7 @@ export function AccountSnapshot() {
     if (!v) return '—';
     if (v.formatted) return v.formatted;
     if (typeof v.amount === 'number') {
-      const n = v.amount.toLocaleString('ro-RO', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const n = v.amount.toLocaleString('ro-RO', N2);
       return v.currency ? `${n} ${v.currency}` : n;
     }
     return '—';
@@ -148,6 +181,22 @@ export function AccountSnapshot() {
               <label>Positions</label>
               <span className="mono">{holdings.length}</span>
             </div>
+            <div>
+              <label>Total value</label>
+              <span className="mono">{formatMoney(totalMv || null)}</span>
+            </div>
+            {totalPnl !== 0 && totalCost !== 0 && (
+              <div>
+                <label>Unrealized P&amp;L</label>
+                <span
+                  className="mono"
+                  style={{ color: totalPnl > 0 ? 'var(--ok, #4caf50)' : totalPnl < 0 ? 'var(--err, #f44336)' : undefined }}
+                >
+                  {totalPnl >= 0 ? '+' : ''}{formatMoney(totalPnl)}
+                  {totalCost ? ` (${totalPnl >= 0 ? '+' : ''}${((totalPnl / totalCost) * 100).toFixed(2)}%)` : ''}
+                </span>
+              </div>
+            )}
             {loadedAt && (
               <div style={{ marginLeft: 'auto' }}>
                 <span className="dim" style={{ fontSize: '0.8rem' }}>as of {loadedAt}</span>
@@ -160,46 +209,86 @@ export function AccountSnapshot() {
               <thead>
                 <tr style={{ borderBottom: '1px solid var(--border, #333)' }}>
                   <th style={{ textAlign: 'left', padding: '0.4rem 0.5rem' }}>Symbol</th>
+                  <th style={{ textAlign: 'left', padding: '0.4rem 0.5rem' }}>Market</th>
                   <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem' }}>Qty</th>
                   <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem' }}>Avg cost</th>
                   <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem' }}>Current</th>
                   <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem' }}>Market value</th>
+                  <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem' }}>Weight</th>
                   <th style={{ textAlign: 'right', padding: '0.4rem 0.5rem' }}>P&amp;L</th>
                 </tr>
               </thead>
               <tbody>
                 {holdings.map((h, i) => {
-                  const pnl = h.unrealizedPnl as number | undefined;
-                  const cost = h.averagePrice && h.quantity ? h.averagePrice * h.quantity : undefined;
-                  const pnlPositive = pnl !== undefined && pnl > 0;
-                  const pnlNegative = pnl !== undefined && pnl < 0;
+                  const pnl = typeof h.unrealizedPnl === 'number' ? h.unrealizedPnl : undefined;
+                  const cost = typeof h.averagePrice === 'number' && typeof h.quantity === 'number'
+                    ? h.averagePrice * h.quantity : undefined;
+                  const mv = typeof h.marketValue === 'number' ? h.marketValue : undefined;
+                  const weight = mv !== undefined && totalMv > 0 ? (mv / totalMv) * 100 : undefined;
+                  const pnlColor = pnl !== undefined
+                    ? (pnl > 0 ? 'var(--ok, #4caf50)' : pnl < 0 ? 'var(--err, #f44336)' : undefined)
+                    : undefined;
+                  const ccy = typeof h.currency === 'string' && h.currency ? h.currency : 'RON';
+                  const longName = nameOf(h);
                   return (
-                    <tr key={h.symbol ?? i} style={{ borderBottom: '1px solid var(--border, #222)' }}>
+                    <tr key={`${h.symbol ?? 'row'}-${i}`} style={{ borderBottom: '1px solid var(--border, #222)' }}>
                       <td style={{ padding: '0.4rem 0.5rem' }}>
-                        <span className="mono">{String(h.symbol ?? '—')}</span>
+                        <div className="mono">{String(h.symbol ?? '—')}</div>
+                        {longName && (
+                          <div className="dim" style={{ fontSize: '0.75rem' }}>{longName}</div>
+                        )}
+                      </td>
+                      <td style={{ padding: '0.4rem 0.5rem' }} className="mono dim">
+                        {typeof h.market === 'string' && h.market ? h.market : '—'}
                       </td>
                       <td style={{ textAlign: 'right', padding: '0.4rem 0.5rem' }} className="mono">
-                        {h.quantity ?? '—'}
+                        {typeof h.quantity === 'number' ? nfQty(h.quantity) : '—'}
                       </td>
                       <td style={{ textAlign: 'right', padding: '0.4rem 0.5rem' }} className="mono">
-                        {h.averagePrice != null ? Number(h.averagePrice).toFixed(4) : '—'}
+                        {typeof h.averagePrice === 'number' ? nfPrice(h.averagePrice) : '—'}
                       </td>
                       <td style={{ textAlign: 'right', padding: '0.4rem 0.5rem' }} className="mono">
-                        {h.currentPrice != null ? Number(h.currentPrice).toFixed(4) : '—'}
+                        {typeof h.currentPrice === 'number' ? nfPrice(h.currentPrice) : '—'}
                       </td>
                       <td style={{ textAlign: 'right', padding: '0.4rem 0.5rem' }} className="mono">
-                        {formatRon(h.marketValue as number | undefined)}
+                        {formatMoney(mv, ccy)}
                       </td>
-                      <td style={{
-                        textAlign: 'right', padding: '0.4rem 0.5rem',
-                        color: pnlPositive ? 'var(--ok, #4caf50)' : pnlNegative ? 'var(--err, #f44336)' : undefined,
-                      }} className="mono">
-                        {pnl != null ? `${pnl >= 0 ? '+' : ''}${formatRon(pnl)}${formatPct(pnl, cost)}` : '—'}
+                      <td style={{ textAlign: 'right', padding: '0.4rem 0.5rem' }} className="mono dim">
+                        {weight !== undefined ? `${weight.toFixed(1)}%` : '—'}
+                      </td>
+                      <td style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: pnlColor }} className="mono">
+                        {pnl !== undefined
+                          ? `${pnl >= 0 ? '+' : ''}${formatMoney(pnl, ccy)}${cost ? ` (${pnl >= 0 ? '+' : ''}${((pnl / cost) * 100).toFixed(2)}%)` : ''}`
+                          : '—'}
                       </td>
                     </tr>
                   );
                 })}
               </tbody>
+              {(totalMv > 0 || totalPnl !== 0) && (
+                <tfoot>
+                  <tr style={{ borderTop: '2px solid var(--border, #333)', fontWeight: 600 }}>
+                    <td style={{ padding: '0.5rem' }} colSpan={5}>Total</td>
+                    <td style={{ textAlign: 'right', padding: '0.5rem' }} className="mono">
+                      {formatMoney(totalMv || null)}
+                    </td>
+                    <td style={{ textAlign: 'right', padding: '0.5rem' }} className="mono dim">
+                      {totalMv > 0 ? '100.0%' : '—'}
+                    </td>
+                    <td
+                      style={{
+                        textAlign: 'right', padding: '0.5rem',
+                        color: totalPnl > 0 ? 'var(--ok, #4caf50)' : totalPnl < 0 ? 'var(--err, #f44336)' : undefined,
+                      }}
+                      className="mono"
+                    >
+                      {totalPnl !== 0
+                        ? `${totalPnl >= 0 ? '+' : ''}${formatMoney(totalPnl)}${totalCost ? ` (${totalPnl >= 0 ? '+' : ''}${((totalPnl / totalCost) * 100).toFixed(2)}%)` : ''}`
+                        : '—'}
+                    </td>
+                  </tr>
+                </tfoot>
+              )}
             </table>
           )}
 
