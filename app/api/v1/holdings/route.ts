@@ -12,7 +12,7 @@ import { getBtClient } from '@/lib/bt/client-pool';
 import { getPortfolioKey } from '@/lib/bt/portfolio-key';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
-import { assertAllowed, filterRecords, readRecordFields } from '@/lib/filters';
+import { assertAllowed, filterBtHoldings, filterRecords, readRecordFields } from '@/lib/filters';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -42,9 +42,13 @@ export const GET = withRoute(async (req) => {
     });
   }
 
-  // BT returns either a bare array or { items: [...] }. Filter the array
-  // shape; preserve the envelope shape so clients that depend on it don't
-  // have to change.
+  // BT's holdings response can come in a few shapes. Handle:
+  //   - the real shape: { Total: { Positions: [...], CurrencyRates: [...] } }
+  //     (Numerar-cash-with-inner-MoneyBalances-currency, plus stock positions)
+  //   - bare array
+  //   - { items: [...] }
+  // filterBtHoldings handles the first case (and is a no-op on the others).
+  holdings = filterBtHoldings(holdings, caller.filters);
   if (Array.isArray(holdings)) {
     holdings = filterRecords(holdings as unknown[], caller.filters, readRecordFields);
   } else if (holdings && typeof holdings === 'object') {

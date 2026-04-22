@@ -154,26 +154,120 @@ export function filterRecords<T>(
 
 /**
  * BT payloads are `unknown` — this helper reads common field names off a
- * record of unknown shape without throwing. The field priorities match the
- * shapes observed in holdings/orders/cash responses.
+ * record of unknown shape without throwing. BT uses PascalCase on most
+ * endpoints (Currency, Market, Code) and occasionally nests the currency
+ * under a `.Value` / `.value` sub-object (e.g. on MoneyBalance entries).
+ * We probe both cases so the filter logic stays endpoint-agnostic.
  */
 export function readRecordFields(
   r: unknown,
 ): { market?: string; currency?: string; symbol?: string } {
   if (!r || typeof r !== 'object') return {};
   const o = r as Record<string, unknown>;
-  const pickStr = (...keys: string[]): string | undefined => {
+  const pickStr = (obj: Record<string, unknown>, ...keys: string[]): string | undefined => {
     for (const k of keys) {
-      const v = o[k];
+      const v = obj[k];
       if (typeof v === 'string' && v.trim()) return v.trim();
     }
     return undefined;
   };
-  return {
-    market: pickStr('market', 'marketCode', 'exchange'),
-    currency: pickStr('currency', 'currencyId', 'currencyCode', 'ccy'),
-    symbol: pickStr('symbol', 'code', 'ticker', 'instrument'),
+  const pickNested = (parentKey: string, ...keys: string[]): string | undefined => {
+    const parent = o[parentKey];
+    if (!parent || typeof parent !== 'object') return undefined;
+    return pickStr(parent as Record<string, unknown>, ...keys);
   };
+  return {
+    market: pickStr(o, 'market', 'Market', 'marketCode', 'MarketCode', 'exchange', 'Exchange'),
+    currency: pickStr(o, 'currency', 'Currency', 'currencyId', 'CurrencyId', 'currencyCode', 'CurrencyCode', 'ccy', 'Ccy')
+      ?? pickNested('value', 'currency', 'Currency')
+      ?? pickNested('Value', 'currency', 'Currency'),
+    symbol: pickStr(o, 'symbol', 'Symbol', 'code', 'Code', 'ticker', 'Ticker', 'instrument', 'Instrument'),
+  };
+}
+
+/**
+ * Shape-aware filter for BT's holdings payload. The upstream response is
+ * roughly:
+ *
+ *   { Total: {
+ *       Positions: [
+ *         { AssetType: 'Numerar', MoneyBalances: [
+ *             { Title, Value: { Currency, Formatted, Amount, ... } }, ...
+ *         ] },
+ *         { AssetType: '...', Symbol, Market, Currency, ... },  // stock
+ *         ...
+ *       ],
+ *       CurrencyRates: [ { Name: 'EUR', Rate: 4.92 }, ... ],
+ *   } }
+ *
+ * For stock positions we filter the Position itself by its top-level
+ * Market/Currency/Symbol. For the "Numerar" (cash) position we instead
+ * filter the inner MoneyBalances array — currency lives at .Value.Currency
+ * there — and drop the whole position if every balance is filtered out.
+ * CurrencyRates are also filtered by the Name field so the FX table
+ * doesn't leak currencies the key can't see.
+ *
+ * Mutates the input for simplicity; callers pass the just-received BT
+ * response so there's no shared state to worry about.
+ */
+export function filterBtHoldings(payload: unknown, filters: ApiKeyFilters | undefined): unknown {
+  if (!filters || !payload || typeof payload !== 'object') return payload;
+  const root = payload as Record<string, unknown>;
+  const totalKey = 'Total' in root ? 'Total' : 'total' in root ? 'total' : null;
+  if (!totalKey) return payload;
+  const total = root[totalKey];
+  if (!total || typeof total !== 'object') return payload;
+  const t = total as Record<string, unknown>;
+
+  const positionsKey = 'Positions' in t ? 'Positions' : 'positions' in t ? 'positions' : null;
+  if (positionsKey && Array.isArray(t[positionsKey])) {
+    const kept: unknown[] = [];
+    for (const pos of t[positionsKey] as unknown[]) {
+      const next = filterPosition(pos, filters);
+      if (next !== null) kept.push(next);
+    }
+    t[positionsKey] = kept;
+  }
+
+  const ratesKey = 'CurrencyRates' in t ? 'CurrencyRates' : 'currencyRates' in t ? 'currencyRates' : null;
+  if (ratesKey && Array.isArray(t[ratesKey])) {
+    t[ratesKey] = filterRecords(t[ratesKey] as unknown[], filters, (r) => {
+      if (!r || typeof r !== 'object') return {};
+      const o = r as Record<string, unknown>;
+      const name = (typeof o.Name === 'string' ? o.Name : typeof o.name === 'string' ? o.name : undefined);
+      return { currency: name ?? null };
+    });
+  }
+
+  return payload;
+}
+
+function filterPosition(pos: unknown, filters: ApiKeyFilters): unknown | null {
+  if (!pos || typeof pos !== 'object') return pos;
+  const p = pos as Record<string, unknown>;
+  const assetType = (typeof p.AssetType === 'string' ? p.AssetType
+    : typeof p.assetType === 'string' ? p.assetType : '') as string;
+  const isCash = assetType === 'Numerar';
+
+  if (isCash) {
+    const balKey = 'MoneyBalances' in p ? 'MoneyBalances' : 'moneyBalances' in p ? 'moneyBalances' : null;
+    if (balKey && Array.isArray(p[balKey])) {
+      const kept = (p[balKey] as unknown[]).filter((b) => {
+        const fields = readRecordFields(b);
+        return isAllowedOn(filters, 'currencies', fields.currency ?? null);
+      });
+      if (kept.length === 0) return null;
+      p[balKey] = kept;
+    }
+    return p;
+  }
+
+  // Stock / other non-cash position — check all three axes on the position.
+  const fields = readRecordFields(p);
+  if (!isAllowedOn(filters, 'markets', fields.market ?? null)) return null;
+  if (!isAllowedOn(filters, 'currencies', fields.currency ?? null)) return null;
+  if (!isAllowedOn(filters, 'stocks', fields.symbol ?? null)) return null;
+  return p;
 }
 
 /**
