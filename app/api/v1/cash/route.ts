@@ -1,18 +1,31 @@
 /**
  * GET /api/v1/cash
  *
- * Returns the available cash on the tenant's default portfolio, in the
- * portfolio's default evaluation currency. For multi-currency accounts the
- * response echoes the currencyId so clients can disambiguate.
+ * Returns the cash balances for the tenant's default portfolio across ALL
+ * evaluation currencies the portfolio supports (RON, USD, EUR, GBP, …).
+ *
+ * Why one call wasn't enough: `portfolio.getCash({ portfolioKey, currencyId })`
+ * only returns balances for the requested evaluation currency — users with
+ * USD/EUR holdings saw nothing when the resolver defaulted to RON. We now
+ * iterate every PortfolioCurrency on the account and flatten the results.
+ *
+ * The per-key currency filter is applied BEFORE we call BT (so we don't
+ * waste requests on disallowed currencies) AND after (defense in depth).
+ *
+ * Response shape:
+ *   {
+ *     mode, portfolioKey,
+ *     cash: BalanceEntry[],                       // flat, across all currencies
+ *     errors?: [{ currency: string, message }]    // only present on partial failures
+ *   }
  *
  * Read-only — does NOT emit an audit event. Cloud Logging captures the
- * access log automatically via `withRoute`.
+ * access log via `withRoute`.
  */
 
 import { requireApiKey } from '@/lib/auth/api-key';
 import { getBtClient } from '@/lib/bt/client-pool';
 import { getPortfolioKey } from '@/lib/bt/portfolio-key';
-import { getEvaluationCurrencyId } from '@/lib/bt/currency';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
 import { filterRecords, isAllowedOn } from '@/lib/filters';
@@ -21,8 +34,8 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * Cash balance entries expose currency under `value.currency` (per
- * AccountSnapshot.tsx) — unwrap that for the filter pick.
+ * Cash balance entries expose currency under `value.currency` — unwrap that
+ * for the filter pick. Fall back to top-level variants when present.
  */
 function cashCurrency(entry: unknown): string | undefined {
   if (!entry || typeof entry !== 'object') return undefined;
@@ -36,43 +49,96 @@ function cashCurrency(entry: unknown): string | undefined {
   return typeof direct === 'string' && direct.trim() ? direct.trim() : undefined;
 }
 
+interface EvalCurrency {
+  id: string | number;
+  name: string;
+}
+
 export const GET = withRoute(async (req) => {
   const caller = await requireApiKey(req);
   const client = await getBtClient(caller.tenant, caller.mode);
   const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
 
-  // getCash requires the evaluation currencyId. Some accounts don't have
-  // `profile.selectedPortfolioPanelCurrencyID` populated — the helper
-  // falls back to the evaluation-currencies nomenclature (preferring RON).
-  const currencyId = await getEvaluationCurrencyId(caller.tenant, caller.mode, client);
-
-  let cash: unknown;
-  try {
-    cash = await client.portfolio.getCash({ portfolioKey, currencyId });
-  } catch (e) {
-    throw new ApiError('UPSTREAM_UNAVAILABLE', `BT getCash failed: ${(e as Error).message}`, {
-      context: { uid: caller.tenant.uid, mode: caller.mode },
-    });
+  // Collect the full set of evaluation currencies supported on this account's
+  // portfolios. Using the per-account list (not the global nomenclature)
+  // guarantees every currencyId we pass is accepted by BT — the global
+  // nomenclature's IDs differ per-portfolio and were the source of the earlier
+  // "Moneda solicitata pe portofoliul SPOT nu este disponibila" bug.
+  const accounts = await client.accounts.list();
+  const account =
+    accounts.find((a) => a.selected) ??
+    accounts.find((a) => a.allowTrading) ??
+    accounts[0];
+  if (!account) {
+    throw new ApiError('UPSTREAM_UNAVAILABLE', 'No BT accounts available for this session');
   }
 
-  // Cash is returned as an array of balance entries keyed by currency. Filter
-  // out currencies the key can't see — if none remain, return an empty array.
-  if (Array.isArray(cash)) {
-    cash = filterRecords(cash as unknown[], caller.filters, (entry) => ({
-      currency: cashCurrency(entry) ?? null,
-    }));
-  } else if (cash && typeof cash === 'object') {
-    const obj = cash as Record<string, unknown>;
-    if (Array.isArray(obj.items)) {
-      obj.items = filterRecords(obj.items as unknown[], caller.filters, (entry) => ({
-        currency: cashCurrency(entry) ?? null,
-      }));
+  const byId = new Map<string | number, EvalCurrency>();
+  for (const p of account.portfolios ?? []) {
+    for (const c of p.currencies ?? []) {
+      if (c.id === undefined || c.id === null || c.id === '') continue;
+      const name = typeof c.name === 'string' && c.name.trim() ? c.name.trim() : String(c.id);
+      if (!byId.has(c.id)) byId.set(c.id, { id: c.id, name });
+    }
+  }
+  if (byId.size === 0) {
+    throw new ApiError(
+      'UPSTREAM_UNAVAILABLE',
+      'No evaluation currencies available on this portfolio',
+      { context: { uid: caller.tenant.uid, mode: caller.mode } },
+    );
+  }
+
+  // Pre-filter by the API key's currency rules. Saves a BT call per currency
+  // the caller can't see anyway.
+  const toFetch: EvalCurrency[] = [];
+  for (const c of byId.values()) {
+    if (isAllowedOn(caller.filters, 'currencies', c.name)) toFetch.push(c);
+  }
+
+  if (toFetch.length === 0) {
+    return ok({ mode: caller.mode, portfolioKey, cash: [] });
+  }
+
+  // Parallel fetch — tolerate per-currency failures so a single bad endpoint
+  // doesn't nuke the whole response.
+  const results = await Promise.allSettled(
+    toFetch.map((c) =>
+      client.portfolio.getCash({ portfolioKey, currencyId: c.id }),
+    ),
+  );
+
+  const cash: unknown[] = [];
+  const errors: Array<{ currency: string; message: string }> = [];
+  for (let i = 0; i < toFetch.length; i++) {
+    const r = results[i];
+    const cur = toFetch[i];
+    if (r.status === 'fulfilled') {
+      const v = r.value;
+      if (Array.isArray(v)) {
+        for (const entry of v) cash.push(entry);
+      } else if (v !== null && v !== undefined) {
+        // Defensive — some future BT response might wrap the array.
+        cash.push(v);
+      }
     } else {
-      // Single balance object — drop entirely if its currency is filtered out.
-      const c = cashCurrency(obj);
-      if (c && !isAllowedOn(caller.filters, 'currencies', c)) cash = null;
+      errors.push({
+        currency: cur.name,
+        message: (r.reason as Error)?.message ?? String(r.reason),
+      });
     }
   }
 
-  return ok({ mode: caller.mode, portfolioKey, cash });
+  // Defense-in-depth: filter the flattened list in case BT ever returns
+  // cross-currency rows from a single-currency getCash call.
+  const filtered = filterRecords(cash, caller.filters, (entry) => ({
+    currency: cashCurrency(entry) ?? null,
+  }));
+
+  return ok({
+    mode: caller.mode,
+    portfolioKey,
+    cash: filtered,
+    ...(errors.length ? { errors } : {}),
+  });
 });
