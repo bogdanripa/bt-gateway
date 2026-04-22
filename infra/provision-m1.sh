@@ -317,6 +317,12 @@ fi
 # Authorization header so only our own endpoint accepts it. Recreated each
 # run if the URL or header shape changes — gcloud is idempotent on the name
 # via the update branch.
+#
+# We use the App Engine cron format ("every 45 minutes") rather than the
+# unix-cron "*/45 * * * *". The latter expands to minutes {0, 45} within
+# each hour, which gives a 45-then-15-minute gap instead of a real
+# 45-minute cadence. The App Engine form produces a true 45-minute
+# interval anchored to the job's last update time.
 SERVICE_URL_FOR_CRON="$(gcloud run services describe "$SERVICE_NAME" \
   --region="$REGION" --project="$PROJECT_ID" \
   --format='value(status.url)')"
@@ -332,7 +338,7 @@ fi
 if ! gcloud scheduler jobs describe "$CRON_JOB_NAME" \
      --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
   run gcloud scheduler jobs create http "$CRON_JOB_NAME" \
-    --schedule="*/45 * * * *" \
+    --schedule="every 45 minutes" \
     --time-zone="UTC" \
     --uri="$CRON_TARGET_URL" \
     --http-method=POST \
@@ -342,7 +348,7 @@ if ! gcloud scheduler jobs describe "$CRON_JOB_NAME" \
     --project="$PROJECT_ID"
 else
   run gcloud scheduler jobs update http "$CRON_JOB_NAME" \
-    --schedule="*/45 * * * *" \
+    --schedule="every 45 minutes" \
     --time-zone="UTC" \
     --uri="$CRON_TARGET_URL" \
     --http-method=POST \
