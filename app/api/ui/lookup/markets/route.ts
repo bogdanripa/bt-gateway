@@ -28,18 +28,27 @@ interface MarketOption {
   label: string;
 }
 
+function pickString(o: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const k of keys) {
+    const v = o[k];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+    if (typeof v === 'number' && Number.isFinite(v)) return String(v);
+  }
+  return undefined;
+}
+
 function reshape(markets: unknown): MarketOption[] {
   if (!Array.isArray(markets)) return [];
   const out: MarketOption[] = [];
   for (const m of markets) {
     if (!m || typeof m !== 'object') continue;
     const o = m as Record<string, unknown>;
-    const code = typeof o.code === 'string' ? o.code
-      : typeof o.market === 'string' ? o.market
-      : typeof o.id === 'string' ? o.id
-      : undefined;
+    // BT's Nomenclatures/GetExchanges returns PascalCase (Code, Name, Symbol,
+    // Id, ExchangeId). Cover both cases so this stays resilient if upstream
+    // ever switches.
+    const code = pickString(o, 'code', 'Code', 'market', 'Market', 'symbol', 'Symbol', 'id', 'Id', 'ExchangeId');
     if (!code) continue;
-    const name = typeof o.name === 'string' ? o.name : typeof o.displayName === 'string' ? o.displayName : '';
+    const name = pickString(o, 'name', 'Name', 'displayName', 'DisplayName', 'description', 'Description');
     out.push({ code, label: name ? `${code} — ${name}` : code });
   }
   // Dedup by code.

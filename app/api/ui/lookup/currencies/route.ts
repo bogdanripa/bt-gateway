@@ -19,20 +19,26 @@ interface CurrencyOption {
   label: string;
 }
 
+function pickString(o: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const k of keys) {
+    const v = o[k];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return undefined;
+}
+
 function reshape(currencies: unknown): CurrencyOption[] {
   if (!Array.isArray(currencies)) return [];
   const out: CurrencyOption[] = [];
   for (const c of currencies) {
     if (!c || typeof c !== 'object') continue;
     const o = c as Record<string, unknown>;
-    const code = typeof o.code === 'string' ? o.code
-      : typeof o.currency === 'string' ? o.currency
-      : typeof o.currencyCode === 'string' ? o.currencyCode
-      : typeof o.id === 'string' ? o.id
-      : undefined;
+    // BT uses PascalCase (Code, Name, Symbol). Keep both cases for resilience.
+    const code = pickString(o, 'code', 'Code', 'currency', 'Currency', 'currencyCode', 'CurrencyCode', 'symbol', 'Symbol');
     if (!code) continue;
-    const name = typeof o.name === 'string' ? o.name : typeof o.displayName === 'string' ? o.displayName : '';
-    out.push({ code: code.toUpperCase(), label: name ? `${code.toUpperCase()} — ${name}` : code.toUpperCase() });
+    const name = pickString(o, 'name', 'Name', 'displayName', 'DisplayName', 'description', 'Description');
+    const up = code.toUpperCase();
+    out.push({ code: up, label: name ? `${up} — ${name}` : up });
   }
   const seen = new Set<string>();
   return out.filter((o) => (seen.has(o.code) ? false : (seen.add(o.code), true)));
