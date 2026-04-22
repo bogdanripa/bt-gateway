@@ -155,33 +155,45 @@ export function filterRecords<T>(
 /**
  * BT payloads are `unknown` — this helper reads common field names off a
  * record of unknown shape without throwing. BT uses PascalCase on most
- * endpoints (Currency, Market, Code) and occasionally nests the currency
- * under a `.Value` / `.value` sub-object (e.g. on MoneyBalance entries).
- * We probe both cases so the filter logic stays endpoint-agnostic.
+ * endpoints (Currency, Market, Code) and occasionally nests the identifying
+ * fields under a sub-object (`.Value.Currency` on MoneyBalance entries,
+ * sometimes `.Security.Symbol` / `.Instrument.Code` on position entries).
+ * We probe both the flat case and common nesting containers so the filter
+ * logic stays endpoint-agnostic.
  */
+const SYMBOL_KEYS = ['symbol', 'Symbol', 'code', 'Code', 'ticker', 'Ticker', 'instrument', 'Instrument', 'securitySymbol', 'SecuritySymbol', 'stockSymbol', 'StockSymbol', 'isin', 'Isin', 'ISIN'];
+const MARKET_KEYS = ['market', 'Market', 'marketCode', 'MarketCode', 'exchange', 'Exchange'];
+const CURRENCY_KEYS = ['currency', 'Currency', 'currencyId', 'CurrencyId', 'currencyCode', 'CurrencyCode', 'ccy', 'Ccy'];
+const NESTED_CONTAINERS = ['value', 'Value', 'security', 'Security', 'instrument', 'Instrument', 'securityInfo', 'SecurityInfo'];
+
 export function readRecordFields(
   r: unknown,
 ): { market?: string; currency?: string; symbol?: string } {
   if (!r || typeof r !== 'object') return {};
   const o = r as Record<string, unknown>;
-  const pickStr = (obj: Record<string, unknown>, ...keys: string[]): string | undefined => {
+  const pickStr = (obj: Record<string, unknown>, keys: string[]): string | undefined => {
     for (const k of keys) {
       const v = obj[k];
       if (typeof v === 'string' && v.trim()) return v.trim();
     }
     return undefined;
   };
-  const pickNested = (parentKey: string, ...keys: string[]): string | undefined => {
-    const parent = o[parentKey];
-    if (!parent || typeof parent !== 'object') return undefined;
-    return pickStr(parent as Record<string, unknown>, ...keys);
+  const pickAny = (keys: string[]): string | undefined => {
+    const top = pickStr(o, keys);
+    if (top) return top;
+    for (const k of NESTED_CONTAINERS) {
+      const parent = o[k];
+      if (parent && typeof parent === 'object') {
+        const v = pickStr(parent as Record<string, unknown>, keys);
+        if (v) return v;
+      }
+    }
+    return undefined;
   };
   return {
-    market: pickStr(o, 'market', 'Market', 'marketCode', 'MarketCode', 'exchange', 'Exchange'),
-    currency: pickStr(o, 'currency', 'Currency', 'currencyId', 'CurrencyId', 'currencyCode', 'CurrencyCode', 'ccy', 'Ccy')
-      ?? pickNested('value', 'currency', 'Currency')
-      ?? pickNested('Value', 'currency', 'Currency'),
-    symbol: pickStr(o, 'symbol', 'Symbol', 'code', 'Code', 'ticker', 'Ticker', 'instrument', 'Instrument'),
+    market: pickAny(MARKET_KEYS),
+    currency: pickAny(CURRENCY_KEYS),
+    symbol: pickAny(SYMBOL_KEYS),
   };
 }
 
@@ -242,6 +254,8 @@ export function filterBtHoldings(payload: unknown, filters: ApiKeyFilters | unde
   return payload;
 }
 
+const INNER_POSITION_KEYS = ['Positions', 'positions', 'Securities', 'securities', 'Items', 'items', 'Holdings', 'holdings', 'Stocks', 'stocks', 'SubPositions', 'subPositions'];
+
 function filterPosition(pos: unknown, filters: ApiKeyFilters): unknown | null {
   if (!pos || typeof pos !== 'object') return pos;
   const p = pos as Record<string, unknown>;
@@ -262,8 +276,38 @@ function filterPosition(pos: unknown, filters: ApiKeyFilters): unknown | null {
     return p;
   }
 
-  // Stock / other non-cash position — check all three axes on the position.
+  // Non-cash position. Two possible shapes:
+  //   (a) flat record — Symbol/Market/Currency at top level.
+  //   (b) aggregate record with a nested array of per-security children
+  //       (e.g. Positions/Securities/Items). Filter the inner array and
+  //       drop the aggregate only if everything got filtered out.
+  // Try (b) first: if we find an inner array we prefer filtering it.
+  for (const k of INNER_POSITION_KEYS) {
+    const inner = p[k];
+    if (!Array.isArray(inner)) continue;
+    const kept = (inner as unknown[]).filter((item) => {
+      const f = readRecordFields(item);
+      if (!isAllowedOn(filters, 'markets', f.market ?? null)) return false;
+      if (!isAllowedOn(filters, 'currencies', f.currency ?? null)) return false;
+      if (!isAllowedOn(filters, 'stocks', f.symbol ?? null)) return false;
+      return true;
+    });
+    if (kept.length === 0) return null;
+    p[k] = kept;
+    return p;
+  }
+
+  // (a) flat record path.
   const fields = readRecordFields(p);
+  if (fields.symbol === undefined && fields.market === undefined && fields.currency === undefined) {
+    // Couldn't classify at all — log the keys so we can extend the field list.
+    console.warn(JSON.stringify({
+      severity: 'WARNING',
+      msg: 'filterPosition.unclassified',
+      assetType,
+      keys: Object.keys(p),
+    }));
+  }
   if (!isAllowedOn(filters, 'markets', fields.market ?? null)) return null;
   if (!isAllowedOn(filters, 'currencies', fields.currency ?? null)) return null;
   if (!isAllowedOn(filters, 'stocks', fields.symbol ?? null)) return null;
