@@ -43,32 +43,27 @@ function reshape(markets: unknown): MarketOption[] {
     if (!m || typeof m !== 'object') continue;
     const o = m as Record<string, unknown>;
     // BT's /Nomenclatures/GetExchanges returns { key, description, id, name }:
-    //   - `description` is the exchange name ("Athens Exchange Alternative Market")
-    //   - `key`/`name` is the country (Romanian — "Grecia", "Romania", …)
-    //   - `id` is numeric
-    // There's no short code like "BVB" in this payload, so we use description
-    // as the identifier and include the country in the label for context.
-    // Still also check the classic Code/Symbol fields in case BT ever adds them.
+    //   - `name` and `key` are the SHORT CODE ("BVB", "XETRA", "UK", "US"),
+    //      which is what appears on PositionItem.Market and what
+    //      searchInstrument returns as .market. This is the value we want
+    //      stored as the filter — matching upstream records directly.
+    //   - `description` is the human name ("Bursa de Valori Bucuresti").
+    //      Used only as the dropdown label for clarity.
+    // Fall back to classic Code/Symbol fields if BT ever swaps the shape.
     const code = pickString(
       o,
+      'name', 'Name',
+      'key', 'Key',
       'code', 'Code',
       'symbol', 'Symbol',
       'market', 'Market',
       'shortCode', 'ShortCode',
       'abbreviation', 'Abbreviation',
       'mic', 'MIC',
-      'description', 'Description',
-      'name', 'Name',
-      'key', 'Key',
     );
     if (!code) continue;
-    const country = pickString(o, 'key', 'Key', 'name', 'Name');
     const desc = pickString(o, 'description', 'Description');
-    const label =
-      desc && country && desc !== country ? `${desc} — ${country}` :
-      desc ? desc :
-      country ? country :
-      code;
+    const label = desc && desc !== code ? `${code} — ${desc}` : code;
     out.push({ code, label });
   }
   const seen = new Set<string>();
