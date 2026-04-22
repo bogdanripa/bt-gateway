@@ -161,6 +161,9 @@ export function filterRecords<T>(
  * We probe both the flat case and common nesting containers so the filter
  * logic stays endpoint-agnostic.
  */
+// Symbol field candidates. Covers PositionItem.Code (live per-security rows)
+// and PositionSummary.Ticker (aggregate rows) from bt-trade's typedefs, plus
+// the usual fallbacks for other endpoints.
 const SYMBOL_KEYS = ['symbol', 'Symbol', 'code', 'Code', 'ticker', 'Ticker', 'instrument', 'Instrument', 'securitySymbol', 'SecuritySymbol', 'stockSymbol', 'StockSymbol', 'isin', 'Isin', 'ISIN'];
 const MARKET_KEYS = ['market', 'Market', 'marketCode', 'MarketCode', 'exchange', 'Exchange'];
 const CURRENCY_KEYS = ['currency', 'Currency', 'currencyId', 'CurrencyId', 'currencyCode', 'CurrencyCode', 'ccy', 'Ccy'];
@@ -198,63 +201,83 @@ export function readRecordFields(
 }
 
 /**
- * Shape-aware filter for BT's holdings payload. The upstream response is
- * roughly:
+ * Shape-aware filter for BT's holdings payload. Per the bt-trade package's
+ * types, POST /Portfolio/Select returns:
  *
- *   { Total: {
- *       Positions: [
- *         { AssetType: 'Numerar', MoneyBalances: [
- *             { Title, Value: { Currency, Formatted, Amount, ... } }, ...
- *         ] },
- *         { AssetType: '...', Symbol, Market, Currency, ... },  // stock
- *         ...
- *       ],
- *       CurrencyRates: [ { Name: 'EUR', Rate: 4.92 }, ... ],
- *   } }
+ *   {
+ *     Positions: {                            // PaginatedResult<PositionItem>
+ *       Items: [ { Code, Market, SecurityName, AvgPrice, ... }, ... ],  // the real per-security rows
+ *       Page, PageSize, TotalItemCount,
+ *     },
+ *     Total: {
+ *       Positions: [ { Key, Name, Ticker, AssetType, CurrencyId, Percent,
+ *                      MoneyBalances, ... }, ... ],  // PositionSummary aggregates
+ *       CurrencyRates: [ { Name: 'EUR', Rate, ID }, ... ],
+ *     }
+ *   }
  *
- * For stock positions we filter the Position itself by its top-level
- * Market/Currency/Symbol. For the "Numerar" (cash) position we instead
- * filter the inner MoneyBalances array — currency lives at .Value.Currency
- * there — and drop the whole position if every balance is filtered out.
- * CurrencyRates are also filtered by the Name field so the FX table
- * doesn't leak currencies the key can't see.
+ * We filter BOTH:
+ *   - `Positions.Items` — the actual per-security positions (matched by Code
+ *     for stocks axis, Market for markets axis, etc.). Drop every row that
+ *     fails any axis.
+ *   - `Total.Positions` — the aggregate summary rows. For AssetType='Numerar'
+ *     we filter the nested MoneyBalances by currency and drop the summary
+ *     only if every balance is filtered out. For non-Numerar summary rows
+ *     (per-asset-type totals) we check the row's Ticker against the stocks
+ *     axis.
+ *   - `Total.CurrencyRates` — filtered by rate.Name against currencies axis.
  *
- * Mutates the input for simplicity; callers pass the just-received BT
- * response so there's no shared state to worry about.
+ * Mutates the input in place — callers pass the just-received BT response so
+ * there's no shared state to worry about.
  */
 export function filterBtHoldings(payload: unknown, filters: ApiKeyFilters | undefined): unknown {
   if (!filters || !payload || typeof payload !== 'object') return payload;
   const root = payload as Record<string, unknown>;
-  const totalKey = 'Total' in root ? 'Total' : 'total' in root ? 'total' : null;
-  if (!totalKey) return payload;
-  const total = root[totalKey];
-  if (!total || typeof total !== 'object') return payload;
-  const t = total as Record<string, unknown>;
 
-  const positionsKey = 'Positions' in t ? 'Positions' : 'positions' in t ? 'positions' : null;
-  if (positionsKey && Array.isArray(t[positionsKey])) {
-    const kept: unknown[] = [];
-    for (const pos of t[positionsKey] as unknown[]) {
-      const next = filterPosition(pos, filters);
-      if (next !== null) kept.push(next);
+  // (1) The real positions at Positions.Items.
+  const positions = root['Positions'] ?? root['positions'];
+  if (positions && typeof positions === 'object') {
+    const pp = positions as Record<string, unknown>;
+    const itemsKey = 'Items' in pp ? 'Items' : 'items' in pp ? 'items' : null;
+    if (itemsKey && Array.isArray(pp[itemsKey])) {
+      const filtered = filterRecords(pp[itemsKey] as unknown[], filters, readRecordFields);
+      pp[itemsKey] = filtered;
+      if (typeof pp.TotalItemCount === 'number') pp.TotalItemCount = filtered.length;
+      else if (typeof pp.totalItemCount === 'number') pp.totalItemCount = filtered.length;
     }
-    t[positionsKey] = kept;
   }
 
-  const ratesKey = 'CurrencyRates' in t ? 'CurrencyRates' : 'currencyRates' in t ? 'currencyRates' : null;
-  if (ratesKey && Array.isArray(t[ratesKey])) {
-    t[ratesKey] = filterRecords(t[ratesKey] as unknown[], filters, (r) => {
-      if (!r || typeof r !== 'object') return {};
-      const o = r as Record<string, unknown>;
-      const name = (typeof o.Name === 'string' ? o.Name : typeof o.name === 'string' ? o.name : undefined);
-      return { currency: name ?? null };
-    });
+  // (2) The Total.* aggregates.
+  const totalKey = 'Total' in root ? 'Total' : 'total' in root ? 'total' : null;
+  if (totalKey) {
+    const total = root[totalKey];
+    if (total && typeof total === 'object') {
+      const t = total as Record<string, unknown>;
+
+      const sumKey = 'Positions' in t ? 'Positions' : 'positions' in t ? 'positions' : null;
+      if (sumKey && Array.isArray(t[sumKey])) {
+        const kept: unknown[] = [];
+        for (const pos of t[sumKey] as unknown[]) {
+          const next = filterPosition(pos, filters);
+          if (next !== null) kept.push(next);
+        }
+        t[sumKey] = kept;
+      }
+
+      const ratesKey = 'CurrencyRates' in t ? 'CurrencyRates' : 'currencyRates' in t ? 'currencyRates' : null;
+      if (ratesKey && Array.isArray(t[ratesKey])) {
+        t[ratesKey] = filterRecords(t[ratesKey] as unknown[], filters, (r) => {
+          if (!r || typeof r !== 'object') return {};
+          const o = r as Record<string, unknown>;
+          const name = (typeof o.Name === 'string' ? o.Name : typeof o.name === 'string' ? o.name : undefined);
+          return { currency: name ?? null };
+        });
+      }
+    }
   }
 
   return payload;
 }
-
-const INNER_POSITION_KEYS = ['Positions', 'positions', 'Securities', 'securities', 'Items', 'items', 'Holdings', 'holdings', 'Stocks', 'stocks', 'SubPositions', 'subPositions'];
 
 function filterPosition(pos: unknown, filters: ApiKeyFilters): unknown | null {
   if (!pos || typeof pos !== 'object') return pos;
@@ -276,49 +299,10 @@ function filterPosition(pos: unknown, filters: ApiKeyFilters): unknown | null {
     return p;
   }
 
-  // Non-cash position. Two possible shapes:
-  //   (a) flat record — Symbol/Market/Currency at top level.
-  //   (b) aggregate record with a nested array of per-security children
-  //       (e.g. Positions/Securities/Items). Filter the inner array and
-  //       drop the aggregate only if everything got filtered out.
-  // Try (b) first: if we find an inner array we prefer filtering it.
-  for (const k of INNER_POSITION_KEYS) {
-    const inner = p[k];
-    if (!Array.isArray(inner)) continue;
-    const kept = (inner as unknown[]).filter((item) => {
-      const f = readRecordFields(item);
-      if (!isAllowedOn(filters, 'markets', f.market ?? null)) return false;
-      if (!isAllowedOn(filters, 'currencies', f.currency ?? null)) return false;
-      if (!isAllowedOn(filters, 'stocks', f.symbol ?? null)) return false;
-      return true;
-    });
-    if (kept.length === 0) return null;
-    p[k] = kept;
-    return p;
-  }
-
-  // (a) flat record path.
+  // PositionSummary aggregates (e.g. per-asset-type totals). The identifying
+  // ticker lives on a field called `Ticker` per bt-trade's PositionSummary
+  // typedef. readRecordFields covers that via the SYMBOL_KEYS list.
   const fields = readRecordFields(p);
-  if (fields.symbol === undefined) {
-    // Non-cash position with no extractable symbol. Log the keys AND a
-    // truncated JSON of the row so we can see BT's exact shape and extend
-    // SYMBOL_KEYS / NESTED_CONTAINERS / INNER_POSITION_KEYS.
-    let sample: string;
-    try {
-      sample = JSON.stringify(p);
-      if (sample.length > 800) sample = sample.slice(0, 800) + '…';
-    } catch {
-      sample = '<unserializable>';
-    }
-    console.warn(JSON.stringify({
-      severity: 'WARNING',
-      msg: 'filterPosition.no_symbol',
-      assetType,
-      keys: Object.keys(p),
-      extracted: fields,
-      sample,
-    }));
-  }
   if (!isAllowedOn(filters, 'markets', fields.market ?? null)) return null;
   if (!isAllowedOn(filters, 'currencies', fields.currency ?? null)) return null;
   if (!isAllowedOn(filters, 'stocks', fields.symbol ?? null)) return null;
