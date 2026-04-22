@@ -32,6 +32,7 @@
 import 'server-only';
 import {
   BTTradeClient,
+  AuthError,
   ntfyOtpProvider,
   defaultNtfyTopic,
   type SessionSnapshot,
@@ -244,6 +245,52 @@ export async function getBtClient(t: TenantRef, mode: BtMode): Promise<BTTradeCl
  */
 export function evictBtClient(t: TenantRef, mode: BtMode): void {
   pool.delete(key(t, mode));
+}
+
+/**
+ * Detect the "session is toast" family of errors bt-trade raises when it
+ * can't auto-refresh past a 401: AuthError thrown from the transport's
+ * refresh-and-retry path, or specific message substrings from auth.js.
+ */
+export function isSessionExpired(e: unknown): boolean {
+  if (!e) return false;
+  if (e instanceof AuthError) return true;
+  const msg = (e as Error).message ?? '';
+  if (!msg) return false;
+  return /Session refresh failed|Refresh token has expired|NOT_LOGGED_IN|Cannot refresh/i.test(msg);
+}
+
+/**
+ * Run `op` against this tenant's BT client, transparently retrying ONCE
+ * with a freshly-built client if the first attempt fails because the
+ * session died (bt-trade's refresh-after-401 gave up).
+ *
+ * The rebuild goes through `getBtClient` → `buildClient` → `login()`, which
+ * blocks up to 5 minutes waiting for an OTP to be posted to the tenant's
+ * ntfy topic. Callers that can't tolerate that wait should call
+ * `getBtClient` directly.
+ *
+ * Concurrent requests that hit the same expired session all converge on one
+ * login attempt via the pool's in-flight promise, so the user only has to
+ * post the OTP once even if multiple requests are stuck.
+ */
+export async function runWithSession<T>(
+  tenant: TenantRef,
+  mode: BtMode,
+  op: (client: BTTradeClient) => Promise<T>,
+): Promise<T> {
+  const client = await getBtClient(tenant, mode);
+  try {
+    return await op(client);
+  } catch (e) {
+    if (!isSessionExpired(e)) throw e;
+    // onExpired may already have evicted the pool entry; call again to be
+    // sure, then rebuild. The rebuild will restore from snapshot if it's
+    // still valid (skipping OTP), otherwise prompt for a fresh login.
+    evictBtClient(tenant, mode);
+    const fresh = await getBtClient(tenant, mode);
+    return op(fresh);
+  }
 }
 
 /** Test hook. */

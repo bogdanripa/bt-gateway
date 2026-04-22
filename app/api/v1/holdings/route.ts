@@ -8,7 +8,7 @@
  */
 
 import { requireApiKey } from '@/lib/auth/api-key';
-import { getBtClient } from '@/lib/bt/client-pool';
+import { runWithSession } from '@/lib/bt/client-pool';
 import { getPortfolioKey } from '@/lib/bt/portfolio-key';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
@@ -19,8 +19,6 @@ export const dynamic = 'force-dynamic';
 
 export const GET = withRoute(async (req) => {
   const caller = await requireApiKey(req);
-  const client = await getBtClient(caller.tenant, caller.mode);
-  const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
 
   const market = req.nextUrl.searchParams.get('market') ?? undefined;
   const endDate = req.nextUrl.searchParams.get('endDate') ?? undefined;
@@ -42,14 +40,16 @@ export const GET = withRoute(async (req) => {
   // market is filtered out — otherwise they'd get an empty array with no hint.
   if (market) assertAllowed(caller.filters, { market });
 
+  let portfolioKey: string;
   let holdings: unknown;
   try {
-    holdings = await client.portfolio.getHoldings({
-      portfolioKey,
-      market,
-      endDate,
-    });
+    ({ portfolioKey, holdings } = await runWithSession(caller.tenant, caller.mode, async (client) => {
+      const pk = await getPortfolioKey(caller.tenant, caller.mode, client);
+      const h = await client.portfolio.getHoldings({ portfolioKey: pk, market, endDate });
+      return { portfolioKey: pk, holdings: h };
+    }));
   } catch (e) {
+    if (e instanceof ApiError) throw e;
     throw new ApiError('UPSTREAM_UNAVAILABLE', `BT getHoldings failed: ${(e as Error).message}`, {
       context: { uid: caller.tenant.uid, mode: caller.mode },
     });

@@ -24,7 +24,7 @@
  */
 
 import { requireApiKey } from '@/lib/auth/api-key';
-import { getBtClient } from '@/lib/bt/client-pool';
+import { isSessionExpired, runWithSession } from '@/lib/bt/client-pool';
 import { getPortfolioKey } from '@/lib/bt/portfolio-key';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
@@ -56,78 +56,88 @@ interface EvalCurrency {
 
 export const GET = withRoute(async (req) => {
   const caller = await requireApiKey(req);
-  const client = await getBtClient(caller.tenant, caller.mode);
-  const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
 
-  // Collect the full set of evaluation currencies supported on this account's
-  // portfolios. Using the per-account list (not the global nomenclature)
-  // guarantees every currencyId we pass is accepted by BT — the global
-  // nomenclature's IDs differ per-portfolio and were the source of the earlier
-  // "Moneda solicitata pe portofoliul SPOT nu este disponibila" bug.
-  const accounts = await client.accounts.list();
-  const account =
-    accounts.find((a) => a.selected) ??
-    accounts.find((a) => a.allowTrading) ??
-    accounts[0];
-  if (!account) {
-    throw new ApiError('UPSTREAM_UNAVAILABLE', 'No BT accounts available for this session');
-  }
+  // Wrap BT interaction in runWithSession so a dead session rebuilds (with
+  // the OTP wait) rather than 502-ing every request until manually unstuck.
+  const { portfolioKey, cash, errors } = await runWithSession(caller.tenant, caller.mode, async (client) => {
+    const pk = await getPortfolioKey(caller.tenant, caller.mode, client);
 
-  const byId = new Map<string | number, EvalCurrency>();
-  for (const p of account.portfolios ?? []) {
-    for (const c of p.currencies ?? []) {
-      if (c.id === undefined || c.id === null || c.id === '') continue;
-      const name = typeof c.name === 'string' && c.name.trim() ? c.name.trim() : String(c.id);
-      if (!byId.has(c.id)) byId.set(c.id, { id: c.id, name });
+    // Collect the full set of evaluation currencies supported on this account's
+    // portfolios. Using the per-account list (not the global nomenclature)
+    // guarantees every currencyId we pass is accepted by BT — the global
+    // nomenclature's IDs differ per-portfolio and were the source of the
+    // earlier "Moneda solicitata pe portofoliul SPOT nu este disponibila" bug.
+    const accounts = await client.accounts.list();
+    const account =
+      accounts.find((a) => a.selected) ??
+      accounts.find((a) => a.allowTrading) ??
+      accounts[0];
+    if (!account) {
+      throw new ApiError('UPSTREAM_UNAVAILABLE', 'No BT accounts available for this session');
     }
-  }
-  if (byId.size === 0) {
-    throw new ApiError(
-      'UPSTREAM_UNAVAILABLE',
-      'No evaluation currencies available on this portfolio',
-      { context: { uid: caller.tenant.uid, mode: caller.mode } },
-    );
-  }
 
-  // Pre-filter by the API key's currency rules. Saves a BT call per currency
-  // the caller can't see anyway.
-  const toFetch: EvalCurrency[] = [];
-  for (const c of byId.values()) {
-    if (isAllowedOn(caller.filters, 'currencies', c.name)) toFetch.push(c);
-  }
-
-  if (toFetch.length === 0) {
-    return ok({ mode: caller.mode, portfolioKey, cash: [] });
-  }
-
-  // Parallel fetch — tolerate per-currency failures so a single bad endpoint
-  // doesn't nuke the whole response.
-  const results = await Promise.allSettled(
-    toFetch.map((c) =>
-      client.portfolio.getCash({ portfolioKey, currencyId: c.id }),
-    ),
-  );
-
-  const cash: unknown[] = [];
-  const errors: Array<{ currency: string; message: string }> = [];
-  for (let i = 0; i < toFetch.length; i++) {
-    const r = results[i];
-    const cur = toFetch[i];
-    if (r.status === 'fulfilled') {
-      const v = r.value;
-      if (Array.isArray(v)) {
-        for (const entry of v) cash.push(entry);
-      } else if (v !== null && v !== undefined) {
-        // Defensive — some future BT response might wrap the array.
-        cash.push(v);
+    const byId = new Map<string | number, EvalCurrency>();
+    for (const p of account.portfolios ?? []) {
+      for (const c of p.currencies ?? []) {
+        if (c.id === undefined || c.id === null || c.id === '') continue;
+        const name = typeof c.name === 'string' && c.name.trim() ? c.name.trim() : String(c.id);
+        if (!byId.has(c.id)) byId.set(c.id, { id: c.id, name });
       }
-    } else {
-      errors.push({
-        currency: cur.name,
-        message: (r.reason as Error)?.message ?? String(r.reason),
-      });
     }
-  }
+    if (byId.size === 0) {
+      throw new ApiError(
+        'UPSTREAM_UNAVAILABLE',
+        'No evaluation currencies available on this portfolio',
+        { context: { uid: caller.tenant.uid, mode: caller.mode } },
+      );
+    }
+
+    // Pre-filter by the API key's currency rules. Saves a BT call per currency
+    // the caller can't see anyway.
+    const toFetch: EvalCurrency[] = [];
+    for (const c of byId.values()) {
+      if (isAllowedOn(caller.filters, 'currencies', c.name)) toFetch.push(c);
+    }
+
+    if (toFetch.length === 0) {
+      return { portfolioKey: pk, cash: [] as unknown[], errors: [] as Array<{ currency: string; message: string }> };
+    }
+
+    // Parallel fetch — tolerate per-currency failures so a single bad endpoint
+    // doesn't nuke the whole response.
+    const results = await Promise.allSettled(
+      toFetch.map((c) => client.portfolio.getCash({ portfolioKey: pk, currencyId: c.id })),
+    );
+
+    // If EVERY currency fetch failed and at least one was session-expired,
+    // throw the AuthError up so runWithSession can rebuild and retry.
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+    if (rejected.length === results.length && rejected.some((r) => isSessionExpired(r.reason))) {
+      throw rejected.find((r) => isSessionExpired(r.reason))!.reason;
+    }
+
+    const cashAcc: unknown[] = [];
+    const errorsAcc: Array<{ currency: string; message: string }> = [];
+    for (let i = 0; i < toFetch.length; i++) {
+      const r = results[i];
+      const cur = toFetch[i];
+      if (r.status === 'fulfilled') {
+        const v = r.value;
+        if (Array.isArray(v)) {
+          for (const entry of v) cashAcc.push(entry);
+        } else if (v !== null && v !== undefined) {
+          cashAcc.push(v);
+        }
+      } else {
+        errorsAcc.push({
+          currency: cur.name,
+          message: (r.reason as Error)?.message ?? String(r.reason),
+        });
+      }
+    }
+
+    return { portfolioKey: pk, cash: cashAcc, errors: errorsAcc };
+  });
 
   // Defense-in-depth: filter the flattened list in case BT ever returns
   // cross-currency rows from a single-currency getCash call.
