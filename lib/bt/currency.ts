@@ -3,16 +3,32 @@
  * `portfolio.getCashDetails`.
  *
  * BT's cash endpoints require a `currencyId` — the evaluation currency in
- * which balances should be returned. The profile sometimes carries it as
- * `selectedPortfolioPanelCurrencyID`, but for fresh demo accounts (and some
- * live accounts that have never touched the portfolio panel in the web UI)
- * the field is 0 / null / undefined. When that happens we fall back to
- * `reference.listEvaluationCurrencies()` and pick RON — the only currency
- * that matters for a BVB-focused gateway.
+ * which balances should be returned. Two things make this surprisingly
+ * annoying:
+ *
+ *   1. Currency IDs are PER-PORTFOLIO. The global
+ *      `reference.listEvaluationCurrencies()` returns a generic RON entry
+ *      (usually id=3) that won't be accepted on some portfolios — BT
+ *      rejects with "Moneda solicitata pe portofoliul SPOT nu este
+ *      disponibila!" even when RON is otherwise available on the account.
+ *   2. The profile's `selectedPortfolioPanelCurrencyID` is often 0/null
+ *      for accounts that haven't touched the portfolio panel in the
+ *      web UI.
+ *
+ * So the only robust path is the list BT hands back on the account itself:
+ * `accounts.list()[i].portfolios[j].currencies` — those IDs are guaranteed
+ * to be valid for that portfolio. We match the same account
+ * `portfolio-key.ts` picks (selected → allowTrading → first), then:
+ *
+ *   1. Walk its portfolios looking for one whose currencies contain RON
+ *      (name match). Take that currency id.
+ *   2. If no RON match, use `accounts.defaultCurrencyId(account)` — the
+ *      same logic the BT web app uses (first portfolio's first currency).
+ *   3. If the account has no portfolio currencies at all, fall through to
+ *      the old profile/nomenclature path as a last resort.
  *
  * The resolved id is cached per (uid, mode) for the lifetime of the Cloud
- * Run instance, same pattern as portfolio-key.ts. Currency IDs are server
- * enums — they don't change.
+ * Run instance. On eviction the next call re-resolves from scratch.
  */
 
 import 'server-only';
@@ -35,10 +51,14 @@ function validId(v: unknown): number | null {
   return null;
 }
 
+function isRonCurrency(name: unknown): boolean {
+  return typeof name === 'string' && name.toUpperCase().includes('RON');
+}
+
 /**
  * Returns the evaluation-currency id to use for this tenant + mode. Tries
- * the profile first, then the evaluation-currencies nomenclature (preferring
- * RON), then throws.
+ * the per-portfolio currencies first (reliable), then the profile, then
+ * the global nomenclature (historical last resort).
  */
 export async function getEvaluationCurrencyId(
   t: TenantRef,
@@ -49,8 +69,42 @@ export async function getEvaluationCurrencyId(
   const hit = cache.get(k);
   if (hit) return hit;
 
-  // 1. Profile preference (works for accounts that have used the web UI's
-  //    portfolio panel at least once).
+  // 1. Per-portfolio currencies (the reliable path). Use the same account
+  //    picker as portfolio-key.ts so the resolved currency id is guaranteed
+  //    valid for whatever portfolio we'll call getCash against.
+  try {
+    const accounts = await client.accounts.list();
+    const account =
+      accounts.find((a) => a.selected) ??
+      accounts.find((a) => a.allowTrading) ??
+      accounts[0];
+
+    if (account) {
+      for (const p of account.portfolios ?? []) {
+        const ccs = Array.isArray(p.currencies) ? p.currencies : [];
+        const ron = ccs.find((c) => isRonCurrency(c.name));
+        const chosen = ron?.id;
+        const id = validId(chosen);
+        if (id) {
+          cache.set(k, id);
+          return id;
+        }
+      }
+
+      // No RON on any portfolio — use the web app's default pick.
+      const def = validId(client.accounts.defaultCurrencyId(account));
+      if (def) {
+        cache.set(k, def);
+        return def;
+      }
+    }
+  } catch (e) {
+    console.warn(
+      JSON.stringify({ severity: 'WARNING', msg: 'currency.portfolio_currencies_failed', err: (e as Error).message }),
+    );
+  }
+
+  // 2. Profile preference (accounts that have used the web portfolio panel).
   try {
     const profile = await client.profile.get();
     const id = validId((profile as Record<string, unknown>)['selectedPortfolioPanelCurrencyID']);
@@ -59,14 +113,13 @@ export async function getEvaluationCurrencyId(
       return id;
     }
   } catch (e) {
-    // Profile fetch failure is not fatal — fall through to the nomenclature.
     console.warn(
       JSON.stringify({ severity: 'WARNING', msg: 'currency.profile_failed', err: (e as Error).message }),
     );
   }
 
-  // 2. Nomenclature fallback. Pick RON if present (BVB-focused default),
-  //    otherwise the first entry.
+  // 3. Global nomenclature — historical last resort. Known to return IDs
+  //    that aren't valid on some portfolios; kept only for completeness.
   let currencies: unknown[];
   try {
     const raw = await client.reference.listEvaluationCurrencies();
@@ -79,7 +132,7 @@ export async function getEvaluationCurrencyId(
     );
   }
 
-  if (!Array.isArray(currencies) || currencies.length === 0) {
+  if (currencies.length === 0) {
     throw new ApiError(
       'UPSTREAM_UNAVAILABLE',
       'BT returned no evaluation currencies — cannot resolve currencyId',
@@ -87,8 +140,6 @@ export async function getEvaluationCurrencyId(
     );
   }
 
-  // Find RON. Currency code / name fields aren't strictly typed — look at
-  // several common shapes: { Code: 'RON' }, { code: 'RON' }, { Symbol: 'RON' }.
   const isRon = (c: unknown): boolean => {
     if (!c || typeof c !== 'object') return false;
     const o = c as Record<string, unknown>;
