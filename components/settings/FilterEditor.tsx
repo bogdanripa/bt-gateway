@@ -106,6 +106,7 @@ export function FilterEditor({ mode, filters, onChange, embedded }: FilterEditor
           void searchMarkets(mode, q).then(setMarkets).catch(() => { /* silent */ });
         }}
         live
+        strict
       />
       <AxisRow
         title="Currencies"
@@ -175,9 +176,11 @@ interface AxisRowProps {
   onChange: (side: SideName, next: string[]) => void;
   onQueryChange?: (q: string) => void;
   live?: boolean;
+  /** When true, reject commits for values that don't match an option's code. */
+  strict?: boolean;
 }
 
-function AxisRow({ title, hint, options, filter, onChange, onQueryChange, live }: AxisRowProps) {
+function AxisRow({ title, hint, options, filter, onChange, onQueryChange, live, strict }: AxisRowProps) {
   return (
     <div style={{ marginBottom: '1rem' }}>
       <div style={{ marginBottom: '0.25rem' }}>
@@ -192,6 +195,7 @@ function AxisRow({ title, hint, options, filter, onChange, onQueryChange, live }
           values={filter.include}
           onChange={(v) => onChange('include', v)}
           onQueryChange={onQueryChange}
+          strict={strict}
         />
         <ChipPicker
           label="Out (denied)"
@@ -200,6 +204,7 @@ function AxisRow({ title, hint, options, filter, onChange, onQueryChange, live }
           values={filter.exclude}
           onChange={(v) => onChange('exclude', v)}
           onQueryChange={onQueryChange}
+          strict={strict}
         />
       </div>
     </div>
@@ -213,21 +218,28 @@ interface ChipPickerProps {
   values: string[];
   onChange: (next: string[]) => void;
   onQueryChange?: (q: string) => void;
+  strict?: boolean;
 }
 
 let pickerSeq = 0;
 
-function ChipPicker({ label, placeholder, options, values, onChange, onQueryChange }: ChipPickerProps) {
+function ChipPicker({ label, placeholder, options, values, onChange, onQueryChange, strict }: ChipPickerProps) {
   const [text, setText] = useState('');
+  const [err, setErr] = useState<string | null>(null);
   const listId = useMemo(() => `picker-list-${++pickerSeq}`, []);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   function commit(raw: string) {
     const v = raw.trim().toUpperCase();
     if (!v) return;
-    if (values.some((x) => x.toUpperCase() === v)) { setText(''); return; }
+    if (values.some((x) => x.toUpperCase() === v)) { setText(''); setErr(null); return; }
+    if (strict && !options.some((o) => o.code.toUpperCase() === v)) {
+      setErr(`"${v}" is not a known value — pick one from the suggestions.`);
+      return;
+    }
     onChange([...values, v]);
     setText('');
+    setErr(null);
     onQueryChange?.('');
   }
 
@@ -275,6 +287,7 @@ function ChipPicker({ label, placeholder, options, values, onChange, onQueryChan
           value={text}
           onChange={(e) => {
             setText(e.target.value);
+            if (err) setErr(null);
             onQueryChange?.(e.target.value);
           }}
           onKeyDown={(e) => {
@@ -293,6 +306,11 @@ function ChipPicker({ label, placeholder, options, values, onChange, onQueryChan
           }}
         />
       </div>
+      {err && (
+        <div className="dim" style={{ color: 'var(--err, #f44336)', fontSize: '0.75rem', marginTop: '0.15rem' }}>
+          {err}
+        </div>
+      )}
       <datalist id={listId}>
         {visibleOptions.slice(0, 50).map((o) => (
           <option key={`${o.code}|${o.label}`} value={o.code}>{o.label}</option>

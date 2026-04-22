@@ -57,6 +57,12 @@ function hasConstraints(a: FilterAxis): boolean {
  * Returns true if `value` passes the filter for this axis. `null`/`undefined`
  * values (field missing on the upstream payload) pass when the axis has no
  * include list — we never synthesize a restriction we can't prove.
+ *
+ * Currency matching is substring-based: upstream payloads come in a few
+ * shapes ("RON", "lei (RON)", "Romanian Leu"), so a filter value of "RON"
+ * is expected to match all of them. The record's currency string must
+ * CONTAIN the filter value (case-insensitive). Markets and stocks stay on
+ * exact-equality matching because those codes are well-defined.
  */
 export function isAllowedOn(
   filters: ApiKeyFilters | undefined,
@@ -70,8 +76,22 @@ export function isAllowedOn(
     // No field to match on → only reject if there's an include list (strict).
     return a.include.length === 0;
   }
-  if (a.exclude.some((x) => norm(x) === v)) return false;
-  if (a.include.length > 0 && !a.include.some((x) => norm(x) === v)) return false;
+  const match = axis === 'currencies'
+    ? (filterVal: string) => v.includes(filterVal)
+    : (filterVal: string) => filterVal === v;
+
+  for (const x of a.exclude) {
+    const n = norm(x);
+    if (n && match(n)) return false;
+  }
+  if (a.include.length > 0) {
+    let ok = false;
+    for (const x of a.include) {
+      const n = norm(x);
+      if (n && match(n)) { ok = true; break; }
+    }
+    if (!ok) return false;
+  }
   return true;
 }
 
