@@ -234,14 +234,30 @@ export function filterBtHoldings(payload: unknown, filters: ApiKeyFilters | unde
   if (!filters || !payload || typeof payload !== 'object') return payload;
   const root = payload as Record<string, unknown>;
 
+  // TODO(filter-debug): delete after confirming the holdings filter works on a
+  // live key. Captures before/after sizes on every mutation point and logs the
+  // first PositionItem's keys + extracted axis values so we can see BT's real
+  // shape and adjust readRecordFields if needed.
+  const dbg: Record<string, unknown> = { filters };
+
   // (1) The real positions at Positions.Items.
   const positions = root['Positions'] ?? root['positions'];
   if (positions && typeof positions === 'object') {
     const pp = positions as Record<string, unknown>;
     const itemsKey = 'Items' in pp ? 'Items' : 'items' in pp ? 'items' : null;
     if (itemsKey && Array.isArray(pp[itemsKey])) {
-      const filtered = filterRecords(pp[itemsKey] as unknown[], filters, readRecordFields);
+      const before = pp[itemsKey] as unknown[];
+      dbg.itemsBefore = before.length;
+      if (before.length > 0) {
+        const sample = before[0];
+        if (sample && typeof sample === 'object') {
+          dbg.sampleItemKeys = Object.keys(sample as Record<string, unknown>);
+          dbg.sampleItemExtracted = readRecordFields(sample);
+        }
+      }
+      const filtered = filterRecords(before, filters, readRecordFields);
       pp[itemsKey] = filtered;
+      dbg.itemsAfter = filtered.length;
       if (typeof pp.TotalItemCount === 'number') pp.TotalItemCount = filtered.length;
       else if (typeof pp.totalItemCount === 'number') pp.totalItemCount = filtered.length;
     }
@@ -256,25 +272,53 @@ export function filterBtHoldings(payload: unknown, filters: ApiKeyFilters | unde
 
       const sumKey = 'Positions' in t ? 'Positions' : 'positions' in t ? 'positions' : null;
       if (sumKey && Array.isArray(t[sumKey])) {
+        const beforeSum = (t[sumKey] as unknown[]).length;
         const kept: unknown[] = [];
         for (const pos of t[sumKey] as unknown[]) {
           const next = filterPosition(pos, filters);
           if (next !== null) kept.push(next);
         }
         t[sumKey] = kept;
+        dbg.totalPositionsBefore = beforeSum;
+        dbg.totalPositionsAfter = kept.length;
+      }
+
+      // Top-level Total.MoneyBalances (NOT the ones nested inside the Numerar
+      // summary row — those are handled in filterPosition). These are the
+      // roll-up rows that show e.g. "Total cash" split per currency.
+      const tmbKey = 'MoneyBalances' in t ? 'MoneyBalances' : 'moneyBalances' in t ? 'moneyBalances' : null;
+      if (tmbKey && Array.isArray(t[tmbKey])) {
+        const beforeMb = (t[tmbKey] as unknown[]).length;
+        const filtered = filterRecords(t[tmbKey] as unknown[], filters, (b) => {
+          const fields = readRecordFields(b);
+          return { currency: fields.currency ?? null };
+        });
+        t[tmbKey] = filtered;
+        dbg.totalMoneyBalancesBefore = beforeMb;
+        dbg.totalMoneyBalancesAfter = filtered.length;
       }
 
       const ratesKey = 'CurrencyRates' in t ? 'CurrencyRates' : 'currencyRates' in t ? 'currencyRates' : null;
       if (ratesKey && Array.isArray(t[ratesKey])) {
+        const beforeRates = (t[ratesKey] as unknown[]).length;
         t[ratesKey] = filterRecords(t[ratesKey] as unknown[], filters, (r) => {
           if (!r || typeof r !== 'object') return {};
           const o = r as Record<string, unknown>;
           const name = (typeof o.Name === 'string' ? o.Name : typeof o.name === 'string' ? o.name : undefined);
           return { currency: name ?? null };
         });
+        dbg.ratesBefore = beforeRates;
+        dbg.ratesAfter = (t[ratesKey] as unknown[]).length;
       }
     }
   }
+
+  // TODO(filter-debug): delete alongside the `dbg` collector.
+  console.log(JSON.stringify({
+    severity: 'INFO',
+    msg: 'holdings.filter_debug.run',
+    ...dbg,
+  }));
 
   return payload;
 }
