@@ -37,53 +37,90 @@ Do NOT dump full JSON responses — that's noisy and often contains tokens/IDs. 
 
 ## Scenarios
 
+### 0. Discover the account (run BEFORE prompting the user)
+
+**Do not ask the user to change filter configuration yet.** Before running any scenario that depends on specific symbols/currencies, probe the account with the key's filters already empty (or whatever they currently are — tolerate filtered results here) and figure out what's actually there. The account shape varies per user, so later scenarios must be tailored, not hardcoded.
+
+Steps:
+1. `GET /api/v1/cash` → record the set of currencies present (`BASELINE_CASH_CURRENCIES`).
+2. `GET /api/v1/holdings` → record:
+   - `HELD_SYMBOLS` = `Positions.Items[].Code` (unique, sorted)
+   - `HELD_CURRENCIES` = `Positions.Items[].Currency` (unique, sorted)
+   - `HELD_MARKETS` = `Positions.Items[].Market` (unique, sorted)
+   - `RATE_CURRENCIES` = `Total.CurrencyRates[].Name` (unique, sorted)
+3. `GET /api/v1/orders?statuses=ACTIVA` → record `ACTIVE_ORDER_COUNT`. 502 is acceptable (no active orders session) — just note it.
+
+Then pick the test fixtures and print them to the user so they know what the rest of the run will use:
+- `HELD_PICK` = the first held symbol that is **RON-denominated and on BVB** if any exists, else the first held symbol. Used for `stocks.include` scenarios.
+- `EXCLUDE_PICK` = a held symbol to exclude (pick any, prefer the largest-percentage position if the data is available, else the first). Used for `stocks.exclude` scenarios. Must actually be in `HELD_SYMBOLS` — otherwise the exclude has no visible effect.
+- `NOT_HELD_PICK` = a symbol known to exist on BVB but NOT in `HELD_SYMBOLS`. Candidates to try in order: `TLV`, `SNP`, `BRD`, `H2O`, `TEL` — probe `GET /api/v1/instruments/<sym>` with NO filters and pick the first that returns 200 and isn't held. Used as the "blocked via exclude" probe target AND the single-resource 403 target.
+- `FOREIGN_CURRENCY_PICK` = a currency present in `HELD_CURRENCIES` that is NOT `RON`, if any (e.g. `USD`, `EUR`, `GBP`). Used to verify `currencies.include=[RON]` actually drops foreign-denominated positions. If all holdings are RON, skip the currency-scope assertions on `Positions.Items` and note it.
+
+Print a short summary like:
+```
+Account shape:
+  cash currencies:   [RON]
+  held symbols (9):  CHTU, IU5D, MCHT, TSLA, VUAA, EMXC, EXSA, LEER, VHYL
+  held currencies:   [EUR, GBP, RON, USD]   (foreign present → currency-scope checks valid)
+  held markets:      [BVB, XETRA, LSE, NASDAQ]
+  active orders:     0 (or 502)
+
+Picks for this run:
+  HELD_PICK           = VUAA
+  EXCLUDE_PICK        = TSLA
+  NOT_HELD_PICK       = TLV
+  FOREIGN_CURRENCY    = USD
+```
+
+Store these in shell variables that persist across scenarios (declare them in every `Bash` invocation that needs them, since shell state does NOT persist between tool calls — keep the values in your own notes and re-inject them).
+
 ### 1. Baseline — no filters
 - Filters: `markets`, `currencies`, `stocks` all `{ include: [], exclude: [] }`.
-- Calls:
-  - `GET /api/v1/cash` → record cash currency codes.
-  - `GET /api/v1/holdings` → record `Positions.Items[].Code` (the symbol list) and `Total.CurrencyRates[].Name`.
-  - `GET /api/v1/orders?statuses=ACTIVA` → record `Items.length` (may be 0 if no active orders — that's fine, just note it).
-- Assertion: all calls return 200. Remember the baseline symbols and currencies for later comparisons. Store them in shell variables or a note so subsequent scenarios can diff.
-- Mark PASS if all three are 200 and we have a non-empty holdings set. If holdings is empty, mark INCONCLUSIVE and note that we can't validate later scenarios without some positions.
+- Calls: same three as discovery, but this time with filters guaranteed empty.
+- Assertion: all calls return 200 (orders can be 502 if no session has active orders — note but don't fail). Numbers should match discovery.
+- Mark PASS if all green and `HELD_SYMBOLS` non-empty. If holdings is empty, mark INCONCLUSIVE and note that later scenarios can't validate.
+- **Known gap** (as of 2026-04-22): `/api/v1/cash` currently resolves a single evaluation currency (RON) and calls BT once, so USD/EUR cash balances never surface. If the user confirms they hold non-RON cash but the endpoint returns RON only, flag this as a bug — do not mark the scenario FAIL on that basis alone.
 
 ### 2. Currency only RON
 - Filters: `currencies.include = [RON]`, everything else empty.
 - Calls: `cash`, `holdings`.
 - Assertions:
   - `cash[*].value.currency` (or `cash.currency` on bare entries) only contains `RON`.
-  - `holdings.Total.CurrencyRates[*].Name` only contains `RON`.
+  - `holdings.Total.CurrencyRates[*].Name` only contains `RON` (this one has historically been leaky — CurrencyRates showed EUR/GBP/USD despite the filter).
+  - `holdings.Positions.Items[*].Currency` only contains `RON`. Every position whose `Currency` is in `FOREIGN_CURRENCY_PICK` (or any non-RON value from discovery) should be dropped, and `Positions.TotalItemCount` should match the filtered length. If discovery found no foreign currencies, skip this assertion and note it.
   - `holdings.Total.Positions[?].MoneyBalances` (the Numerar row) only contains RON entries.
-- PASS if all three.
+- PASS only if every applicable check passes. If `CurrencyRates` or per-position currencies still leak non-RON values, mark FAIL and name the exact leaking field.
 
-### 3. Stock exclude TLV
-- Filters: reset, then `stocks.exclude = [TLV]`.
-- Calls: `holdings`, and if baseline had any orders: `orders?statuses=ACTIVA`.
+### 3. Stock exclude (held symbol)
+- Filters: reset, then `stocks.exclude = [EXCLUDE_PICK]` (a symbol that IS in `HELD_SYMBOLS` — otherwise the assertion is trivially green and tests nothing).
+- Calls: `holdings`, and if `ACTIVE_ORDER_COUNT > 0`: `orders?statuses=ACTIVA`.
 - Assertions:
-  - `holdings.Positions.Items[*].Code` does NOT contain `TLV`.
-  - `holdings.Positions.TotalItemCount` reflects the filtered length.
-  - If `orders` endpoint returns a `PaginatedResult`, `Items[*].Code` does NOT contain `TLV`.
+  - `holdings.Positions.Items[*].Code` does NOT contain `EXCLUDE_PICK`.
+  - `holdings.Positions.TotalItemCount` equals baseline_count − 1 (or equal-minus-N if `EXCLUDE_PICK` appeared multiple times).
+  - If `orders` is called, `Items[*].Code` does NOT contain `EXCLUDE_PICK`.
 - Also run a single-resource probe:
-  - `GET /api/v1/instruments/TLV` → expect 403 `FORBIDDEN`.
-- PASS if holdings/orders lists are TLV-free AND the instrument probe is 403.
+  - `GET /api/v1/instruments/<EXCLUDE_PICK>` → expect **403 FORBIDDEN**.
+- PASS if holdings/orders lists dropped the symbol AND the instrument probe is 403.
 
-### 4. Stock include only BRD
-- Filters: reset, then `stocks.include = [BRD]`.
+### 4. Stock include (held symbol only)
+- Filters: reset, then `stocks.include = [HELD_PICK]` (a symbol that IS in `HELD_SYMBOLS`).
 - Calls: `holdings`.
 - Assertions:
-  - `holdings.Positions.Items[*].Code` is a subset of `{BRD}` (or empty if BRD isn't held).
-  - `holdings.Positions.TotalItemCount` equals the filtered length.
+  - `holdings.Positions.Items[*].Code` is a subset of `{HELD_PICK}`.
+  - `holdings.Positions.TotalItemCount` equals the number of kept rows (typically 1).
 - Also probe:
-  - `GET /api/v1/instruments/BRD` → expect 200.
-  - `GET /api/v1/instruments/TLV` → expect 403.
+  - `GET /api/v1/instruments/<HELD_PICK>` → expect 200.
+  - `GET /api/v1/instruments/<NOT_HELD_PICK>` → expect 403 (not in the include list).
+  - If `EXCLUDE_PICK !== HELD_PICK`, also probe `/api/v1/instruments/<EXCLUDE_PICK>` → expect 403.
 - PASS accordingly.
 
 ### 5. Mutation rejection
-- Filters: `stocks.exclude = [TLV]`.
+- Filters: `stocks.exclude = [EXCLUDE_PICK]` (a symbol the user actually cares about blocking — use the same pick as scenario 3).
 - Call:
   ```bash
   curl -sS -w '\nHTTP %{http_code}\n' -X POST "$BASE/api/v1/orders/preview" \
     -H "Authorization: Bearer $KEY" -H "content-type: application/json" \
-    -d '{"symbol":"TLV","side":"buy","price":40,"type":"limit"}'
+    -d "{\"symbol\":\"$EXCLUDE_PICK\",\"side\":\"buy\",\"price\":40,\"type\":\"limit\"}"
   ```
 - Expect: HTTP 403 and `error.code = FORBIDDEN`. Do NOT call the real `/orders` POST — preview is enough to verify the guard and doesn't mutate.
 - PASS if 403 + code=FORBIDDEN.
