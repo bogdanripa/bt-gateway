@@ -107,7 +107,7 @@ export function AccountSnapshot() {
         </h2>
         <div style={{ flex: 1 }} />
         <button onClick={() => { void load(); }} disabled={loading}>
-          {loading ? 'Loading…' : snapshot ? 'Refresh' : 'Get live data'}
+          {loading ? 'Loading…' : snapshot ? 'Refresh' : 'Fetch from BT'}
         </button>
       </div>
 

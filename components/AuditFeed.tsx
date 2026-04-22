@@ -93,7 +93,7 @@ export function AuditFeed() {
           <tbody>
             {filtered.map((r, i) => (
               <tr key={`${r.ts}-${i}`}>
-                <td className="mono dim">{r.ts.replace('T', ' ').slice(0, 19)}</td>
+                <td className="mono dim">{formatLocal(r.ts)}</td>
                 <td className="mono">{r.type}</td>
                 <td className="mono dim">{r.actor}</td>
                 <td>{r.mode ? <span className={`pill ${r.mode}`}>{r.mode}</span> : ''}</td>
@@ -112,6 +112,22 @@ export function AuditFeed() {
       )}
     </div>
   );
+}
+
+/**
+ * Format an ISO timestamp in the browser's local timezone as
+ * "YYYY-MM-DD HH:MM:SS". Swedish locale ('sv-SE') naturally produces that
+ * shape so we don't have to hand-assemble the pieces. Falls back to the
+ * raw ISO string if the input can't be parsed.
+ */
+function formatLocal(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString('sv-SE', {
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  });
 }
 
 function compactDetail(d: Record<string, unknown>): string {
