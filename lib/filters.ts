@@ -299,13 +299,24 @@ function filterPosition(pos: unknown, filters: ApiKeyFilters): unknown | null {
 
   // (a) flat record path.
   const fields = readRecordFields(p);
-  if (fields.symbol === undefined && fields.market === undefined && fields.currency === undefined) {
-    // Couldn't classify at all — log the keys so we can extend the field list.
+  if (fields.symbol === undefined) {
+    // Non-cash position with no extractable symbol. Log the keys AND a
+    // truncated JSON of the row so we can see BT's exact shape and extend
+    // SYMBOL_KEYS / NESTED_CONTAINERS / INNER_POSITION_KEYS.
+    let sample: string;
+    try {
+      sample = JSON.stringify(p);
+      if (sample.length > 800) sample = sample.slice(0, 800) + '…';
+    } catch {
+      sample = '<unserializable>';
+    }
     console.warn(JSON.stringify({
       severity: 'WARNING',
-      msg: 'filterPosition.unclassified',
+      msg: 'filterPosition.no_symbol',
       assetType,
       keys: Object.keys(p),
+      extracted: fields,
+      sample,
     }));
   }
   if (!isAllowedOn(filters, 'markets', fields.market ?? null)) return null;
