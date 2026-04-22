@@ -2,8 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { uiFetch } from '@/lib/ui-client';
-
-type Mode = 'demo' | 'live';
+import { useMode, type Mode } from './mode/ModeProvider';
 
 interface SessionInfo {
   mode: Mode;
@@ -83,6 +82,7 @@ function extractStateTimestamp(state: Record<string, unknown> | null): string | 
 }
 
 export function SessionStatus() {
+  const { mode } = useMode();
   const [data, setData] = useState<Response | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -123,7 +123,7 @@ export function SessionStatus() {
 
       {data && (
         <div style={{ marginTop: '1rem', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1rem' }}>
-          {data.sessions.map(s => {
+          {data.sessions.filter(s => s.mode === mode).map(s => {
             const accRel = fmtRelative(s.accessTokenExpiresAt, now);
             const refRel = fmtRelative(s.refreshTokenExpiresAt, now);
             const cash = extractCash(s.lastKnownState);

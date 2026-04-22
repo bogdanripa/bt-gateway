@@ -9,7 +9,8 @@
 
 import { Fragment, useEffect, useState } from 'react';
 import { uiFetch } from '@/lib/ui-client';
-import { EMPTY_FILTERS, FilterEditor, type Filters, type Mode } from './FilterEditor';
+import { useMode, type Mode } from '../mode/ModeProvider';
+import { EMPTY_FILTERS, FilterEditor, type Filters } from './FilterEditor';
 
 interface KeyRow {
   id: string;
@@ -53,9 +54,9 @@ function summarizeFilters(f: Filters | undefined): string {
 }
 
 export function ApiKeysCard() {
+  const { mode } = useMode();
   const [rows, setRows] = useState<KeyRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [mode, setMode] = useState<Mode>('demo');
   const [label, setLabel] = useState('');
   const [createFilters, setCreateFilters] = useState<Filters>(() => cloneFilters(EMPTY_FILTERS));
   const [showCreateFilters, setShowCreateFilters] = useState(false);
@@ -170,15 +171,8 @@ export function ApiKeysCard() {
       )}
 
       <div className="row" style={{ marginBottom: '0.5rem', alignItems: 'end' }}>
-        <div>
-          <label>Mode</label>
-          <select value={mode} onChange={(e) => setMode(e.target.value as Mode)}>
-            <option value="demo">demo</option>
-            <option value="live">live</option>
-          </select>
-        </div>
         <div style={{ flex: 2 }}>
-          <label>Label</label>
+          <label>New <span className={`pill ${mode}`}>{mode}</span> key label</label>
           <input
             value={label}
             onChange={(e) => setLabel(e.target.value)}
@@ -211,16 +205,23 @@ export function ApiKeysCard() {
         </div>
       )}
 
-      {loading ? (
-        <p className="dim">Loading…</p>
-      ) : rows.length === 0 ? (
-        <p className="dim">No keys yet.</p>
-      ) : (
+      {(() => {
+        const visible = rows.filter((r) => r.mode === mode);
+        if (loading) return <p className="dim">Loading…</p>;
+        if (rows.length === 0) return <p className="dim">No keys yet.</p>;
+        if (visible.length === 0) {
+          return (
+            <p className="dim">
+              No <span className={`pill ${mode}`}>{mode}</span> keys yet — create one
+              above, or switch mode in the header to see your other keys.
+            </p>
+          );
+        }
+        return (
         <table>
           <thead>
             <tr>
               <th>Label</th>
-              <th>Mode</th>
               <th>Prefix</th>
               <th>Filters</th>
               <th>Created</th>
@@ -230,11 +231,10 @@ export function ApiKeysCard() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
+            {visible.map((r) => (
               <Fragment key={r.id}>
                 <tr>
                   <td>{r.label}</td>
-                  <td><span className={`pill ${r.mode}`}>{r.mode}</span></td>
                   <td className="mono">{r.prefix}…</td>
                   <td className="mono dim" style={{ fontSize: '0.8rem', maxWidth: 260 }}>
                     {summarizeFilters(r.filters)}
@@ -266,7 +266,7 @@ export function ApiKeysCard() {
                 </tr>
                 {editingId === r.id && (
                   <tr>
-                    <td colSpan={8} style={{ background: 'var(--card-inner-bg, rgba(128,128,128,0.05))' }}>
+                    <td colSpan={7} style={{ background: 'var(--card-inner-bg, rgba(128,128,128,0.05))' }}>
                       <FilterEditor
                         mode={editingMode}
                         filters={editingFilters}
@@ -284,7 +284,8 @@ export function ApiKeysCard() {
             ))}
           </tbody>
         </table>
-      )}
+        );
+      })()}
     </div>
   );
 }

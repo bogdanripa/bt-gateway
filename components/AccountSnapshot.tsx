@@ -1,9 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { uiFetch } from '@/lib/ui-client';
-
-type Mode = 'demo' | 'live';
+import { useMode, type Mode } from './mode/ModeProvider';
 
 interface MoneyValue {
   formatted?: string;
@@ -54,11 +53,19 @@ function formatPct(pnl: number | undefined, cost: number | undefined): string {
 }
 
 export function AccountSnapshot() {
-  const [mode, setMode] = useState<Mode>('demo');
+  const { mode } = useMode();
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [loadedAt, setLoadedAt] = useState<string | null>(null);
+
+  // Drop the snapshot when the global mode flips so the user doesn't see
+  // demo data with a "live" header for a flicker before the next load().
+  useEffect(() => {
+    setSnapshot(null);
+    setErr(null);
+    setLoadedAt(null);
+  }, [mode]);
 
   async function load() {
     setLoading(true);
@@ -95,20 +102,9 @@ export function AccountSnapshot() {
   return (
     <div className="card">
       <div className="row" style={{ alignItems: 'center', gap: '1rem' }}>
-        <h2 style={{ margin: 0 }}>Live account data</h2>
-        <div style={{ display: 'flex', gap: '0.5rem' }}>
-          {(['demo', 'live'] as Mode[]).map(m => (
-            <button
-              key={m}
-              className={mode === m ? '' : 'ghost'}
-              onClick={() => { setMode(m); setSnapshot(null); setErr(null); }}
-              disabled={loading}
-              style={{ padding: '0.25rem 0.75rem' }}
-            >
-              {m}
-            </button>
-          ))}
-        </div>
+        <h2 style={{ margin: 0 }}>
+          Account data — <span className={`pill ${mode}`}>{mode}</span>
+        </h2>
         <div style={{ flex: 1 }} />
         <button onClick={() => { void load(); }} disabled={loading}>
           {loading ? 'Loading…' : snapshot ? 'Refresh' : 'Get live data'}

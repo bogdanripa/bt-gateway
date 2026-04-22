@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import Script from 'next/script';
 import { getFirebaseClientConfig } from '@/lib/firebase/public-config';
 import { AuthProvider } from '@/components/auth/AuthProvider';
+import { ModeProvider } from '@/components/mode/ModeProvider';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -35,7 +36,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         />
       </head>
       <body>
-        <AuthProvider>{children}</AuthProvider>
+        <AuthProvider>
+          <ModeProvider>{children}</ModeProvider>
+        </AuthProvider>
       </body>
     </html>
   );

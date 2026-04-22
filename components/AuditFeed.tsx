@@ -8,6 +8,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { uiFetch } from '@/lib/ui-client';
+import { useMode } from './mode/ModeProvider';
 
 interface EventRow {
   type: string;
@@ -22,6 +23,7 @@ interface EventRow {
 const ROUTINE_TYPES = new Set(['refresh.success', 'refresh.failure', 'signin.restored']);
 
 export function AuditFeed() {
+  const { mode } = useMode();
   const [rows, setRows] = useState<EventRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -41,10 +43,12 @@ export function AuditFeed() {
 
   useEffect(() => { void refresh(); }, []);
 
-  const filtered = useMemo(
-    () => showRefresh ? rows : rows.filter((r) => !ROUTINE_TYPES.has(r.type)),
-    [rows, showRefresh],
-  );
+  const filtered = useMemo(() => {
+    // Hide events from the other mode entirely; events with no mode (e.g.
+    // telegram.linked, which is tenant-wide) always pass through.
+    const byMode = rows.filter((r) => !r.mode || r.mode === mode);
+    return showRefresh ? byMode : byMode.filter((r) => !ROUTINE_TYPES.has(r.type));
+  }, [rows, mode, showRefresh]);
 
   return (
     <div className="card">

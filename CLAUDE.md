@@ -53,6 +53,8 @@ Auth helpers live in `lib/auth/`:
 
 `demo` and `live` are fully parallel on every axis: separate `bt_creds/{mode}` docs, separate `bt_session/{mode}` snapshots, separate `trading_state/{mode}` subtrees, and separate API-key prefixes (`bvb_demo_…` / `bvb_live_…`). Mode is derived from the API-key prefix inside `authenticateApiKey`; there is **no body param to pick a mode** — a compromised demo key physically cannot hit live endpoints.
 
+**UI mode is global.** The browser side has a single `ModeProvider` (`components/mode/ModeProvider.tsx`) mounted in `app/layout.tsx` between `AuthProvider` and the page. The selected mode is rendered as a toggle in the header (`Nav.tsx`) and persisted to `localStorage`. Every dashboard / settings widget reads from `useMode()` and filters its data accordingly: `AccountSnapshot`, `SessionStatus`, `AuditFeed` (mode-less events still pass through), `ApiKeysCard` (also filters its rows by mode), `CredsCard` (the settings page mounts a single instance keyed on mode so it remounts on switch). Do not introduce per-component mode state — wire new mode-scoped widgets to the context instead.
+
 When adding a new `/api/v1/*` route that touches BT, the pattern is always:
 
 ```ts
