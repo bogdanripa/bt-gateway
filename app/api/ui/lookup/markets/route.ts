@@ -77,11 +77,13 @@ export const GET = withRoute(async (req) => {
     const raw = await client.markets.list();
     const all = reshape(raw);
     // Diagnostic: if BT returned records but we reshaped 0 options, the field
-    // names we're looking at don't match the upstream payload. Log one sample
-    // row's keys so we can extend the pickString list without guessing.
+    // names we're looking at don't match the upstream payload. Log ONE sample
+    // row's keys AND echo it into the response body so we can extend the
+    // pickString list without a Cloud Logging round-trip.
+    let debug: unknown = undefined;
     if (Array.isArray(raw) && raw.length > 0 && all.length === 0) {
-      const sample = raw[0];
-      const keys = sample && typeof sample === 'object' ? Object.keys(sample as Record<string, unknown>) : [];
+      const sample = raw[0] && typeof raw[0] === 'object' ? raw[0] as Record<string, unknown> : null;
+      const keys = sample ? Object.keys(sample) : [];
       console.warn(JSON.stringify({
         severity: 'WARNING',
         msg: 'lookup.markets.reshape_empty',
@@ -90,11 +92,12 @@ export const GET = withRoute(async (req) => {
         upstreamCount: raw.length,
         sampleKeys: keys,
       }));
+      debug = { upstreamCount: raw.length, sampleKeys: keys, sample };
     }
     const markets = q
       ? all.filter((m) => m.code.toLowerCase().includes(q) || m.label.toLowerCase().includes(q))
       : all;
-    return ok({ mode, markets });
+    return ok(debug ? { mode, markets, _debug: debug } : { mode, markets });
   } catch (e) {
     throw new ApiError('UPSTREAM_UNAVAILABLE', `markets.list failed: ${(e as Error).message}`);
   }
