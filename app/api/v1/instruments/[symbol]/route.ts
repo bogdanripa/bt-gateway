@@ -1,12 +1,25 @@
 /**
- * GET /api/v1/instruments/:symbol
+ * GET /api/v1/instruments/:symbol[?marketId=N]
  *
- * Tick details for an instrument by symbol. Two-step upstream call:
- *   1. searchInstrument(symbol) → pick the BVB hit
- *   2. getInstrument({ portfolioKey, code, marketId }) → the tick payload
+ * Instrument lookup by symbol. Two-step upstream flow:
+ *   1. searchInstrument(symbol) → list of listings across markets.
+ *   2. getInstrument({ portfolioKey, code, marketId }) → tick payload for one.
  *
- * Optional `?marketId=` override — otherwise we use the first match from
- * searchInstrument, which is what the BT web UI does.
+ * Response:
+ *   {
+ *     mode, symbol,
+ *     instruments: [{ code, marketId, market, currency, name, ... }, ...],
+ *     instrument: { ...tick detail for the picked listing... },
+ *     marketId: <the picked listing's marketId>,
+ *   }
+ *
+ * The per-key filter is applied to `searchInstrument` hits: any listing
+ * whose market or currency isn't allowed is dropped from `instruments`,
+ * and the picked detail obviously has to pass too. If the filter excludes
+ * every listing, the response is 403.
+ *
+ * `?marketId=N` narrows to that single listing (and its detail). If that
+ * listing exists upstream but isn't allowed by the filter, we still 403.
  */
 
 import { requireApiKey } from '@/lib/auth/api-key';
@@ -14,64 +27,96 @@ import { runWithSession } from '@/lib/bt/client-pool';
 import { getPortfolioKey } from '@/lib/bt/portfolio-key';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
-import { assertAllowed, readRecordFields } from '@/lib/filters';
+import { assertAllowed, filterRecords, readRecordFields } from '@/lib/filters';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+type Hit = { code?: string; marketId?: string | number; market?: string; currency?: string; name?: string };
 
 export const GET = withRoute<{ symbol: string }>(async (req, { params }) => {
   const caller = await requireApiKey(req);
   const symbol = params.symbol?.toUpperCase();
   if (!symbol) throw new ApiError('BAD_REQUEST', 'symbol path segment required');
 
-  // Reject before touching BT when the symbol alone is enough to tell.
+  // Fast-fail before touching BT when the symbol itself is blocked.
   assertAllowed(caller.filters, { symbol });
 
   const overrideMarketId = req.nextUrl.searchParams.get('marketId');
 
   try {
-    const { code, marketId, instrument } = await runWithSession(caller.tenant, caller.mode, async (client) => {
-      const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
-      const hits = await client.markets.searchInstrument(symbol);
-      if (!Array.isArray(hits) || hits.length === 0) {
-        throw new ApiError('NOT_FOUND', `Instrument not found: ${symbol}`);
-      }
-      // Pick the hit matching the caller's marketId override if any, else
-      // the first. Enforcing the filter against the matched hit (not the
-      // first) prevents a caller from bypassing the markets/currency guard
-      // via ?marketId=X.
-      type Hit = { code?: string; marketId?: string | number; market?: string; currency?: string };
-      const pick = overrideMarketId
-        ? (hits as Hit[]).find((h) => String(h.marketId) === String(overrideMarketId))
-        : (hits[0] as Hit);
-      if (!pick) {
-        throw new ApiError(
-          'NOT_FOUND',
-          `Instrument ${symbol} not listed on marketId=${overrideMarketId}`,
-        );
-      }
-      if (!pick.marketId) {
-        throw new ApiError('UPSTREAM_UNAVAILABLE', 'searchInstrument hit missing marketId');
-      }
-      const resolvedCode = pick.code ?? symbol;
-      assertAllowed(caller.filters, {
-        symbol: resolvedCode,
-        market: pick.market,
-        currency: pick.currency,
-      });
+    const { code, marketId, instrument, instruments } = await runWithSession(
+      caller.tenant,
+      caller.mode,
+      async (client) => {
+        const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
+        const hits = (await client.markets.searchInstrument(symbol)) as Hit[];
+        if (!Array.isArray(hits) || hits.length === 0) {
+          throw new ApiError('NOT_FOUND', `Instrument not found: ${symbol}`);
+        }
 
-      const inst = await client.markets.getInstrument({
-        portfolioKey,
-        code: resolvedCode,
-        marketId: pick.marketId,
-      });
-      return { code: resolvedCode, marketId: pick.marketId, instrument: inst };
-    });
+        // Filter the full list of listings by markets + currencies + stocks
+        // axes. `stocks` was already checked up-front on the raw symbol, but
+        // running it here too is harmless and keeps the listing semantics
+        // consistent (if a caller ever queries under an alias that rewrites
+        // to a different code, this is the last line of defense).
+        const allowed = filterRecords(hits as unknown[], caller.filters, readRecordFields) as Hit[];
+        if (allowed.length === 0) {
+          throw new ApiError(
+            'FORBIDDEN',
+            `Instrument ${symbol} has no listings accessible under this key's filters`,
+            { context: { symbol, totalHits: hits.length } },
+          );
+        }
 
-    // Belt-and-braces: the instrument payload may carry a currency field;
-    // reject if filtered out.
+        // Pick the listing to fetch detail for. If the caller gave marketId,
+        // it must be in the filtered set.
+        const pick = overrideMarketId
+          ? allowed.find((h) => String(h.marketId) === String(overrideMarketId))
+          : allowed[0];
+        if (!pick) {
+          // Distinguish "listing exists but filter excludes it" (403) from
+          // "listing simply doesn't exist at all" (404).
+          const existsUnfiltered = hits.some(
+            (h) => String(h.marketId) === String(overrideMarketId),
+          );
+          throw new ApiError(
+            existsUnfiltered ? 'FORBIDDEN' : 'NOT_FOUND',
+            existsUnfiltered
+              ? `Listing ${symbol} on marketId=${overrideMarketId} is blocked by this key's filters`
+              : `Instrument ${symbol} not listed on marketId=${overrideMarketId}`,
+          );
+        }
+        if (!pick.marketId) {
+          throw new ApiError('UPSTREAM_UNAVAILABLE', 'searchInstrument hit missing marketId');
+        }
+
+        const resolvedCode = pick.code ?? symbol;
+        const inst = await client.markets.getInstrument({
+          portfolioKey,
+          code: resolvedCode,
+          marketId: pick.marketId,
+        });
+        return {
+          code: resolvedCode,
+          marketId: pick.marketId,
+          instrument: inst,
+          instruments: allowed,
+        };
+      },
+    );
+
+    // Belt-and-braces: if the detail payload carries a currency/market field
+    // that wasn't visible at search time, re-check it.
     assertAllowed(caller.filters, readRecordFields(instrument));
-    return ok({ mode: caller.mode, symbol: code, marketId, instrument });
+
+    return ok({
+      mode: caller.mode,
+      symbol: code,
+      marketId,
+      instruments,
+      instrument,
+    });
   } catch (e) {
     if (e instanceof ApiError) throw e;
     throw new ApiError('UPSTREAM_UNAVAILABLE', `getInstrument failed: ${(e as Error).message}`);
