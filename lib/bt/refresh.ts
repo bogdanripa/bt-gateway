@@ -58,10 +58,36 @@ export async function refreshTenantMode(
     timeoutMs: 1_000, // we never expect to enter this path from cron
   });
 
+  // The throwaway client used in this path ONLY does a refresh — no portfolio
+  // calls, no order placement. We enable `debug: true` so bt-trade's transport
+  // layer skips its usual access-token/refresh-token redaction, and wire a log
+  // callback that forwards every `http:request`/`http:response` event to
+  // Cloud Logging as structured JSON. The resulting log lines include the
+  // full URL, method, headers, request body (`grant_type=refresh_token&…`),
+  // response status, and response body — exactly what we need for debugging
+  // an `IP diferit` / refresh failure.
+  //
+  // SECURITY: this means refresh tokens appear in Cloud Logging on every
+  // cron tick. They're the same tokens already persisted (KMS-protected) in
+  // Firestore, but Cloud Logging retention is separate. Scoped to this
+  // refresh path only — the main client pool (lib/bt/client-pool.ts) keeps
+  // its existing redaction unless BT_CLIENT_DEBUG=1.
   const client = new BTTradeClient({
     demo: mode === 'demo',
     otpProvider,
     timeoutMs: 20_000,
+    debug: true,
+    log: (msg, data) => {
+      if (msg !== 'http:request' && msg !== 'http:response') return;
+      console.log(JSON.stringify({
+        severity: 'INFO',
+        msg: `bt.refresh.${msg.split(':')[1]}`,
+        uid: t.uid,
+        mode,
+        requestId,
+        data,
+      }));
+    },
     onSessionChange: async (snap) => {
       if (snap) await setBtSession(t, mode, snap).catch(() => { /* best-effort */ });
     },
