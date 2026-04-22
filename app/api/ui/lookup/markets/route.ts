@@ -32,7 +32,6 @@ function pickString(o: Record<string, unknown>, ...keys: string[]): string | und
   for (const k of keys) {
     const v = o[k];
     if (typeof v === 'string' && v.trim()) return v.trim();
-    if (typeof v === 'number' && Number.isFinite(v)) return String(v);
   }
   return undefined;
 }
@@ -43,10 +42,18 @@ function reshape(markets: unknown): MarketOption[] {
   for (const m of markets) {
     if (!m || typeof m !== 'object') continue;
     const o = m as Record<string, unknown>;
-    // BT's Nomenclatures/GetExchanges returns PascalCase (Code, Name, Symbol,
-    // Id, ExchangeId). Cover both cases so this stays resilient if upstream
-    // ever switches.
-    const code = pickString(o, 'code', 'Code', 'market', 'Market', 'symbol', 'Symbol', 'id', 'Id', 'ExchangeId');
+    // BT's Nomenclatures/GetExchanges returns PascalCase records. The exchange
+    // code (e.g. "BVB") lives on a string field — never fall back to numeric
+    // ids like ExchangeId, because those would get rendered as the chip value.
+    const code = pickString(
+      o,
+      'code', 'Code',
+      'symbol', 'Symbol',
+      'market', 'Market',
+      'shortCode', 'ShortCode',
+      'abbreviation', 'Abbreviation',
+      'mic', 'MIC',
+    );
     if (!code) continue;
     const name = pickString(o, 'name', 'Name', 'displayName', 'DisplayName', 'description', 'Description');
     out.push({ code, label: name ? `${code} — ${name}` : code });
@@ -67,7 +74,23 @@ export const GET = withRoute(async (req) => {
 
   const client = await getBtClient(caller.tenant, mode);
   try {
-    const all = reshape(await client.markets.list());
+    const raw = await client.markets.list();
+    const all = reshape(raw);
+    // Diagnostic: if BT returned records but we reshaped 0 options, the field
+    // names we're looking at don't match the upstream payload. Log one sample
+    // row's keys so we can extend the pickString list without guessing.
+    if (Array.isArray(raw) && raw.length > 0 && all.length === 0) {
+      const sample = raw[0];
+      const keys = sample && typeof sample === 'object' ? Object.keys(sample as Record<string, unknown>) : [];
+      console.warn(JSON.stringify({
+        severity: 'WARNING',
+        msg: 'lookup.markets.reshape_empty',
+        uid: caller.tenant.uid,
+        mode,
+        upstreamCount: raw.length,
+        sampleKeys: keys,
+      }));
+    }
     const markets = q
       ? all.filter((m) => m.code.toLowerCase().includes(q) || m.label.toLowerCase().includes(q))
       : all;
