@@ -42,9 +42,13 @@ function reshape(markets: unknown): MarketOption[] {
   for (const m of markets) {
     if (!m || typeof m !== 'object') continue;
     const o = m as Record<string, unknown>;
-    // BT's Nomenclatures/GetExchanges returns PascalCase records. The exchange
-    // code (e.g. "BVB") lives on a string field — never fall back to numeric
-    // ids like ExchangeId, because those would get rendered as the chip value.
+    // BT's /Nomenclatures/GetExchanges returns { key, description, id, name }:
+    //   - `description` is the exchange name ("Athens Exchange Alternative Market")
+    //   - `key`/`name` is the country (Romanian — "Grecia", "Romania", …)
+    //   - `id` is numeric
+    // There's no short code like "BVB" in this payload, so we use description
+    // as the identifier and include the country in the label for context.
+    // Still also check the classic Code/Symbol fields in case BT ever adds them.
     const code = pickString(
       o,
       'code', 'Code',
@@ -53,12 +57,20 @@ function reshape(markets: unknown): MarketOption[] {
       'shortCode', 'ShortCode',
       'abbreviation', 'Abbreviation',
       'mic', 'MIC',
+      'description', 'Description',
+      'name', 'Name',
+      'key', 'Key',
     );
     if (!code) continue;
-    const name = pickString(o, 'name', 'Name', 'displayName', 'DisplayName', 'description', 'Description');
-    out.push({ code, label: name ? `${code} — ${name}` : code });
+    const country = pickString(o, 'key', 'Key', 'name', 'Name');
+    const desc = pickString(o, 'description', 'Description');
+    const label =
+      desc && country && desc !== country ? `${desc} — ${country}` :
+      desc ? desc :
+      country ? country :
+      code;
+    out.push({ code, label });
   }
-  // Dedup by code.
   const seen = new Set<string>();
   return out.filter((o) => (seen.has(o.code) ? false : (seen.add(o.code), true)));
 }
@@ -74,30 +86,11 @@ export const GET = withRoute(async (req) => {
 
   const client = await getBtClient(caller.tenant, mode);
   try {
-    const raw = await client.markets.list();
-    const all = reshape(raw);
-    // Diagnostic: if BT returned records but we reshaped 0 options, the field
-    // names we're looking at don't match the upstream payload. Log ONE sample
-    // row's keys AND echo it into the response body so we can extend the
-    // pickString list without a Cloud Logging round-trip.
-    let debug: unknown = undefined;
-    if (Array.isArray(raw) && raw.length > 0 && all.length === 0) {
-      const sample = raw[0] && typeof raw[0] === 'object' ? raw[0] as Record<string, unknown> : null;
-      const keys = sample ? Object.keys(sample) : [];
-      console.warn(JSON.stringify({
-        severity: 'WARNING',
-        msg: 'lookup.markets.reshape_empty',
-        uid: caller.tenant.uid,
-        mode,
-        upstreamCount: raw.length,
-        sampleKeys: keys,
-      }));
-      debug = { upstreamCount: raw.length, sampleKeys: keys, sample };
-    }
+    const all = reshape(await client.markets.list());
     const markets = q
       ? all.filter((m) => m.code.toLowerCase().includes(q) || m.label.toLowerCase().includes(q))
       : all;
-    return ok(debug ? { mode, markets, _debug: debug } : { mode, markets });
+    return ok({ mode, markets });
   } catch (e) {
     throw new ApiError('UPSTREAM_UNAVAILABLE', `markets.list failed: ${(e as Error).message}`);
   }

@@ -106,7 +106,6 @@ export function FilterEditor({ mode, filters, onChange, embedded }: FilterEditor
           void searchMarkets(mode, q).then(setMarkets).catch(() => { /* silent */ });
         }}
         live
-        strict
       />
       <AxisRow
         title="Currencies"

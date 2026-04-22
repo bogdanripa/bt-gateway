@@ -152,11 +152,9 @@ export function ApiKeysCard() {
     <div className="card">
       <h2>API keys</h2>
       <p className="dim">
-        Use these in your trading scripts: <span className="mono">Authorization: Bearer &lt;key&gt;</span>.
-        Mode is fixed per key — a <span className="pill demo">demo</span> key can only hit
-        demo endpoints; a <span className="pill live">live</span> key only live. Optional
-        filters restrict what each key can see or act on: narrow by market (e.g. BVB),
-        currency (e.g. RON), or individual stock symbols.
+        Use in <span className="mono">Authorization: Bearer &lt;key&gt;</span>. Optional
+        filters restrict what each key can see or act on — by market, currency, or
+        individual stock symbols.
       </p>
 
       {err && <div className="notice err">{err}</div>}
@@ -172,7 +170,7 @@ export function ApiKeysCard() {
 
       <div className="row" style={{ marginBottom: '0.5rem', alignItems: 'end' }}>
         <div style={{ flex: 2 }}>
-          <label>New <span className={`pill ${mode}`}>{mode}</span> key label</label>
+          <label>New key label</label>
           <input
             value={label}
             onChange={(e) => setLabel(e.target.value)}
