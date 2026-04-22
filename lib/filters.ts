@@ -234,30 +234,17 @@ export function filterBtHoldings(payload: unknown, filters: ApiKeyFilters | unde
   if (!filters || !payload || typeof payload !== 'object') return payload;
   const root = payload as Record<string, unknown>;
 
-  // TODO(filter-debug): delete after confirming the holdings filter works on a
-  // live key. Captures before/after sizes on every mutation point and logs the
-  // first PositionItem's keys + extracted axis values so we can see BT's real
-  // shape and adjust readRecordFields if needed.
-  const dbg: Record<string, unknown> = { filters };
-
-  // (1) The real positions at Positions.Items.
+  // (1) The real positions at Positions.Items. bt-trade@0.3.1+ puts Market,
+  // Currency, MarketId, CurrencyId directly on each PositionItem, so
+  // readRecordFields (which probes Currency/Market in its PascalCase lists)
+  // resolves all three axes without any extra lookup.
   const positions = root['Positions'] ?? root['positions'];
   if (positions && typeof positions === 'object') {
     const pp = positions as Record<string, unknown>;
     const itemsKey = 'Items' in pp ? 'Items' : 'items' in pp ? 'items' : null;
     if (itemsKey && Array.isArray(pp[itemsKey])) {
-      const before = pp[itemsKey] as unknown[];
-      dbg.itemsBefore = before.length;
-      if (before.length > 0) {
-        const sample = before[0];
-        if (sample && typeof sample === 'object') {
-          dbg.sampleItemKeys = Object.keys(sample as Record<string, unknown>);
-          dbg.sampleItemExtracted = readRecordFields(sample);
-        }
-      }
-      const filtered = filterRecords(before, filters, readRecordFields);
+      const filtered = filterRecords(pp[itemsKey] as unknown[], filters, readRecordFields);
       pp[itemsKey] = filtered;
-      dbg.itemsAfter = filtered.length;
       if (typeof pp.TotalItemCount === 'number') pp.TotalItemCount = filtered.length;
       else if (typeof pp.totalItemCount === 'number') pp.totalItemCount = filtered.length;
     }
@@ -272,15 +259,12 @@ export function filterBtHoldings(payload: unknown, filters: ApiKeyFilters | unde
 
       const sumKey = 'Positions' in t ? 'Positions' : 'positions' in t ? 'positions' : null;
       if (sumKey && Array.isArray(t[sumKey])) {
-        const beforeSum = (t[sumKey] as unknown[]).length;
         const kept: unknown[] = [];
         for (const pos of t[sumKey] as unknown[]) {
           const next = filterPosition(pos, filters);
           if (next !== null) kept.push(next);
         }
         t[sumKey] = kept;
-        dbg.totalPositionsBefore = beforeSum;
-        dbg.totalPositionsAfter = kept.length;
       }
 
       // Top-level Total.MoneyBalances (NOT the ones nested inside the Numerar
@@ -290,20 +274,15 @@ export function filterBtHoldings(payload: unknown, filters: ApiKeyFilters | unde
       // every row when markets/stocks have include lists (undefined fields).
       const tmbKey = 'MoneyBalances' in t ? 'MoneyBalances' : 'moneyBalances' in t ? 'moneyBalances' : null;
       if (tmbKey && Array.isArray(t[tmbKey])) {
-        const beforeMb = (t[tmbKey] as unknown[]).length;
-        const filtered = (t[tmbKey] as unknown[]).filter((b) => {
+        t[tmbKey] = (t[tmbKey] as unknown[]).filter((b) => {
           const fields = readRecordFields(b);
           return isAllowedOn(filters, 'currencies', fields.currency ?? null);
         });
-        t[tmbKey] = filtered;
-        dbg.totalMoneyBalancesBefore = beforeMb;
-        dbg.totalMoneyBalancesAfter = filtered.length;
       }
 
       // CurrencyRates is also a currency-only resource — same reasoning.
       const ratesKey = 'CurrencyRates' in t ? 'CurrencyRates' : 'currencyRates' in t ? 'currencyRates' : null;
       if (ratesKey && Array.isArray(t[ratesKey])) {
-        const beforeRates = (t[ratesKey] as unknown[]).length;
         t[ratesKey] = (t[ratesKey] as unknown[]).filter((r) => {
           if (!r || typeof r !== 'object') return true;
           const o = r as Record<string, unknown>;
@@ -312,18 +291,9 @@ export function filterBtHoldings(payload: unknown, filters: ApiKeyFilters | unde
             : undefined;
           return isAllowedOn(filters, 'currencies', name ?? null);
         });
-        dbg.ratesBefore = beforeRates;
-        dbg.ratesAfter = (t[ratesKey] as unknown[]).length;
       }
     }
   }
-
-  // TODO(filter-debug): delete alongside the `dbg` collector.
-  console.log(JSON.stringify({
-    severity: 'INFO',
-    msg: 'holdings.filter_debug.run',
-    ...dbg,
-  }));
 
   return payload;
 }

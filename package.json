@@ -14,7 +14,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@bogdanripa/bt-trade": "^0.3.0",
+    "@bogdanripa/bt-trade": "^0.3.1",
     "@google-cloud/firestore": "^7.11.0",
     "@google-cloud/kms": "^4.5.0",
     "firebase": "^10.14.1",

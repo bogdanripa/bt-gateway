@@ -23,19 +23,6 @@ export const GET = withRoute(async (req) => {
   const market = req.nextUrl.searchParams.get('market') ?? undefined;
   const endDate = req.nextUrl.searchParams.get('endDate') ?? undefined;
 
-  // TODO(filter-debug): delete after confirming the holdings filter works on a
-  // live key. Fires only when filters are present on the key so normal traffic
-  // stays quiet.
-  if (caller.filters) {
-    console.log(JSON.stringify({
-      severity: 'INFO',
-      msg: 'holdings.filter_debug.caller',
-      uid: caller.tenant.uid,
-      mode: caller.mode,
-      filters: caller.filters,
-    }));
-  }
-
   // If the caller explicitly requested a market, reject up-front when that
   // market is filtered out — otherwise they'd get an empty array with no hint.
   if (market) assertAllowed(caller.filters, { market });
