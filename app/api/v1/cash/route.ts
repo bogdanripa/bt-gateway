@@ -28,7 +28,7 @@ import { isSessionExpired, runWithSession } from '@/lib/bt/client-pool';
 import { getPortfolioKey } from '@/lib/bt/portfolio-key';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
-import { filterRecords, isAllowedOn } from '@/lib/filters';
+import { isAllowedOn } from '@/lib/filters';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -140,10 +140,13 @@ export const GET = withRoute(async (req) => {
   });
 
   // Defense-in-depth: filter the flattened list in case BT ever returns
-  // cross-currency rows from a single-currency getCash call.
-  const filtered = filterRecords(cash, caller.filters, (entry) => ({
-    currency: cashCurrency(entry) ?? null,
-  }));
+  // cross-currency rows from a single-currency getCash call. This is a
+  // currency-only resource — the markets and stocks axes don't apply, so we
+  // call isAllowedOn directly instead of filterRecords (which would strictly
+  // reject every row when any other axis has an include list).
+  const filtered = cash.filter((entry) =>
+    isAllowedOn(caller.filters, 'currencies', cashCurrency(entry) ?? null),
+  );
 
   return ok({
     mode: caller.mode,

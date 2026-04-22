@@ -286,26 +286,31 @@ export function filterBtHoldings(payload: unknown, filters: ApiKeyFilters | unde
       // Top-level Total.MoneyBalances (NOT the ones nested inside the Numerar
       // summary row — those are handled in filterPosition). These are the
       // roll-up rows that show e.g. "Total cash" split per currency.
+      // Currency-only records: applying filterRecords would strictly reject
+      // every row when markets/stocks have include lists (undefined fields).
       const tmbKey = 'MoneyBalances' in t ? 'MoneyBalances' : 'moneyBalances' in t ? 'moneyBalances' : null;
       if (tmbKey && Array.isArray(t[tmbKey])) {
         const beforeMb = (t[tmbKey] as unknown[]).length;
-        const filtered = filterRecords(t[tmbKey] as unknown[], filters, (b) => {
+        const filtered = (t[tmbKey] as unknown[]).filter((b) => {
           const fields = readRecordFields(b);
-          return { currency: fields.currency ?? null };
+          return isAllowedOn(filters, 'currencies', fields.currency ?? null);
         });
         t[tmbKey] = filtered;
         dbg.totalMoneyBalancesBefore = beforeMb;
         dbg.totalMoneyBalancesAfter = filtered.length;
       }
 
+      // CurrencyRates is also a currency-only resource — same reasoning.
       const ratesKey = 'CurrencyRates' in t ? 'CurrencyRates' : 'currencyRates' in t ? 'currencyRates' : null;
       if (ratesKey && Array.isArray(t[ratesKey])) {
         const beforeRates = (t[ratesKey] as unknown[]).length;
-        t[ratesKey] = filterRecords(t[ratesKey] as unknown[], filters, (r) => {
-          if (!r || typeof r !== 'object') return {};
+        t[ratesKey] = (t[ratesKey] as unknown[]).filter((r) => {
+          if (!r || typeof r !== 'object') return true;
           const o = r as Record<string, unknown>;
-          const name = (typeof o.Name === 'string' ? o.Name : typeof o.name === 'string' ? o.name : undefined);
-          return { currency: name ?? null };
+          const name = typeof o.Name === 'string' ? o.Name
+            : typeof o.name === 'string' ? o.name
+            : undefined;
+          return isAllowedOn(filters, 'currencies', name ?? null);
         });
         dbg.ratesBefore = beforeRates;
         dbg.ratesAfter = (t[ratesKey] as unknown[]).length;
