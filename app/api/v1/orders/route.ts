@@ -27,7 +27,7 @@
 
 import { z } from 'zod';
 import { requireApiKey } from '@/lib/auth/api-key';
-import { getBtClient } from '@/lib/bt/client-pool';
+import { runWithSession } from '@/lib/bt/client-pool';
 import { getPortfolioKey } from '@/lib/bt/portfolio-key';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
@@ -65,57 +65,35 @@ export const POST = withRoute(async (req, { requestId }) => {
   const symbolUp = args.symbol.toUpperCase();
   assertAllowed(caller.filters, { symbol: symbolUp });
 
-  const client = await getBtClient(caller.tenant, caller.mode);
-  const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
-
-  let marketId = args.marketId;
   let symbol = symbolUp;
-  if (!marketId) {
-    const hits = await client.markets.searchInstrument(symbol).catch((e) => {
-      throw new ApiError('UPSTREAM_UNAVAILABLE', `searchInstrument: ${(e as Error).message}`);
-    });
-    const first = hits[0] as
-      | { code?: string; marketId?: string | number; market?: string; currency?: string }
-      | undefined;
-    if (!first?.marketId) throw new ApiError('NOT_FOUND', `Instrument not found: ${symbol}`);
-    marketId = first.marketId;
-    symbol = first.code ?? symbol;
-    assertAllowed(caller.filters, { symbol, market: first.market, currency: first.currency });
-  }
-
+  let marketId = args.marketId;
+  let result: unknown;
   try {
-    const result = await client.orders.placeOrder({
-      portfolioKey,
-      symbol,
-      marketId,
-      quantity: args.quantity,
-      price: args.price,
-      side: args.side,
-      type: args.type,
-      valability: args.valability,
-    });
-    await audit({
-      tenant: caller.tenant,
-      type: 'order.placed',
-      actor: `api_key:${caller.keyId}`,
-      mode: caller.mode,
-      status: 'ok',
-      requestId,
-      detail: {
+    result = await runWithSession(caller.tenant, caller.mode, async (client) => {
+      const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
+      if (!marketId) {
+        const hits = await client.markets.searchInstrument(symbol);
+        const first = hits[0] as
+          | { code?: string; marketId?: string | number; market?: string; currency?: string }
+          | undefined;
+        if (!first?.marketId) throw new ApiError('NOT_FOUND', `Instrument not found: ${symbol}`);
+        marketId = first.marketId;
+        symbol = first.code ?? symbol;
+        assertAllowed(caller.filters, { symbol, market: first.market, currency: first.currency });
+      }
+      return client.orders.placeOrder({
+        portfolioKey,
         symbol,
-        marketId,
+        marketId: marketId!,
         quantity: args.quantity,
         price: args.price,
         side: args.side,
         type: args.type,
         valability: args.valability,
-        // JSON round-trip strips any non-serializable values (Dates → strings,
-        // functions dropped) so the Firestore write never silently fails.
-        result: JSON.parse(JSON.stringify(result ?? null)) as unknown,
-      },
+      });
     });
-    return ok({ mode: caller.mode, order: result });
   } catch (e) {
+    if (e instanceof ApiError) throw e;
     const msg = (e as Error).message || 'placeOrder failed';
     await audit({
       tenant: caller.tenant,
@@ -129,12 +107,32 @@ export const POST = withRoute(async (req, { requestId }) => {
     });
     throw new ApiError('UPSTREAM_UNAVAILABLE', `placeOrder failed: ${msg}`);
   }
+
+  await audit({
+    tenant: caller.tenant,
+    type: 'order.placed',
+    actor: `api_key:${caller.keyId}`,
+    mode: caller.mode,
+    status: 'ok',
+    requestId,
+    detail: {
+      symbol,
+      marketId,
+      quantity: args.quantity,
+      price: args.price,
+      side: args.side,
+      type: args.type,
+      valability: args.valability,
+      // JSON round-trip strips any non-serializable values (Dates → strings,
+      // functions dropped) so the Firestore write never silently fails.
+      result: JSON.parse(JSON.stringify(result ?? null)) as unknown,
+    },
+  });
+  return ok({ mode: caller.mode, order: result });
 });
 
 export const GET = withRoute(async (req) => {
   const caller = await requireApiKey(req);
-  const client = await getBtClient(caller.tenant, caller.mode);
-  const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
 
   const sp = req.nextUrl.searchParams;
   const statusesRaw = sp.get('statuses');
@@ -148,13 +146,16 @@ export const GET = withRoute(async (req) => {
   if (symbolParam) assertAllowed(caller.filters, { symbol: symbolParam });
 
   try {
-    let orders = await client.orders.search({
-      portfolioKey,
-      statuses,
-      side,
-      symbol: symbolParam,
-      startDate: sp.get('startDate') ?? undefined,
-      endDate: sp.get('endDate') ?? undefined,
+    let orders = await runWithSession(caller.tenant, caller.mode, async (client) => {
+      const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
+      return client.orders.search({
+        portfolioKey,
+        statuses,
+        side,
+        symbol: symbolParam,
+        startDate: sp.get('startDate') ?? undefined,
+        endDate: sp.get('endDate') ?? undefined,
+      });
     });
     if (Array.isArray(orders)) {
       orders = filterRecords(orders as unknown[], caller.filters, readRecordFields);

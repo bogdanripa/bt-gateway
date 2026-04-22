@@ -6,7 +6,7 @@
  */
 
 import { requireApiKey } from '@/lib/auth/api-key';
-import { getBtClient } from '@/lib/bt/client-pool';
+import { runWithSession } from '@/lib/bt/client-pool';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
 import { filterRecords } from '@/lib/filters';
@@ -26,9 +26,8 @@ function marketCode(r: unknown): string | undefined {
 
 export const GET = withRoute(async (req) => {
   const caller = await requireApiKey(req);
-  const client = await getBtClient(caller.tenant, caller.mode);
   try {
-    let markets = await client.markets.list();
+    let markets = await runWithSession(caller.tenant, caller.mode, (client) => client.markets.list());
     if (Array.isArray(markets)) {
       markets = filterRecords(markets as unknown[], caller.filters, (m) => ({
         market: marketCode(m) ?? null,
@@ -36,6 +35,7 @@ export const GET = withRoute(async (req) => {
     }
     return ok({ mode: caller.mode, markets });
   } catch (e) {
+    if (e instanceof ApiError) throw e;
     throw new ApiError('UPSTREAM_UNAVAILABLE', `BT markets.list failed: ${(e as Error).message}`);
   }
 });

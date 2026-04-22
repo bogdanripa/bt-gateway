@@ -15,7 +15,7 @@
  */
 
 import { requireApiKey } from '@/lib/auth/api-key';
-import { getBtClient } from '@/lib/bt/client-pool';
+import { runWithSession } from '@/lib/bt/client-pool';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
 import { assertAllowed, readRecordFields } from '@/lib/filters';
@@ -28,14 +28,15 @@ export const GET = withRoute<{ id: string }>(async (req, { params }) => {
   const id = params.id;
   if (!id) throw new ApiError('BAD_REQUEST', 'order id path segment required');
 
-  const client = await getBtClient(caller.tenant, caller.mode);
-
   try {
-    const [order, history, actions] = await Promise.all([
-      client.orders.get(id),
-      client.orders.getHistory(id).catch(() => null),
-      client.orders.getActions(id).catch(() => null),
-    ]);
+    const { order, history, actions } = await runWithSession(caller.tenant, caller.mode, async (client) => {
+      const [o, h, a] = await Promise.all([
+        client.orders.get(id),
+        client.orders.getHistory(id).catch(() => null),
+        client.orders.getActions(id).catch(() => null),
+      ]);
+      return { order: o, history: h, actions: a };
+    });
     // Hide orders that belong to an axis the key can't see.
     assertAllowed(caller.filters, readRecordFields(order));
     return ok({ mode: caller.mode, order, history, actions });

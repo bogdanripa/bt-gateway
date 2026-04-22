@@ -17,7 +17,7 @@
 
 import { z } from 'zod';
 import { requireApiKey } from '@/lib/auth/api-key';
-import { getBtClient } from '@/lib/bt/client-pool';
+import { runWithSession } from '@/lib/bt/client-pool';
 import { getPortfolioKey } from '@/lib/bt/portfolio-key';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
@@ -50,37 +50,35 @@ export const POST = withRoute(async (req) => {
   const symbolUp = args.symbol.toUpperCase();
   assertAllowed(caller.filters, { symbol: symbolUp });
 
-  const client = await getBtClient(caller.tenant, caller.mode);
-  const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
-
-  // Resolve marketId if not given.
-  let marketId = args.marketId;
   let symbol = symbolUp;
-  if (!marketId) {
-    const hits = await client.markets.searchInstrument(symbol).catch((e) => {
-      throw new ApiError('UPSTREAM_UNAVAILABLE', `searchInstrument: ${(e as Error).message}`);
-    });
-    const first = hits[0] as
-      | { code?: string; marketId?: string | number; market?: string; currency?: string }
-      | undefined;
-    if (!first?.marketId) throw new ApiError('NOT_FOUND', `Instrument not found: ${symbol}`);
-    marketId = first.marketId;
-    symbol = first.code ?? symbol;
-    assertAllowed(caller.filters, { symbol, market: first.market, currency: first.currency });
-  }
-
+  let marketId = args.marketId;
   try {
-    const preview = await client.orders.preview({
-      portfolioKey,
-      symbol,
-      marketId,
-      quantity: args.quantity ?? null,
-      price: args.price,
-      side: args.side,
-      type: args.type,
+    const { preview } = await runWithSession(caller.tenant, caller.mode, async (client) => {
+      const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
+      if (!marketId) {
+        const hits = await client.markets.searchInstrument(symbol);
+        const first = hits[0] as
+          | { code?: string; marketId?: string | number; market?: string; currency?: string }
+          | undefined;
+        if (!first?.marketId) throw new ApiError('NOT_FOUND', `Instrument not found: ${symbol}`);
+        marketId = first.marketId;
+        symbol = first.code ?? symbol;
+        assertAllowed(caller.filters, { symbol, market: first.market, currency: first.currency });
+      }
+      const p = await client.orders.preview({
+        portfolioKey,
+        symbol,
+        marketId: marketId!,
+        quantity: args.quantity ?? null,
+        price: args.price,
+        side: args.side,
+        type: args.type,
+      });
+      return { preview: p };
     });
     return ok({ mode: caller.mode, symbol, marketId, preview });
   } catch (e) {
+    if (e instanceof ApiError) throw e;
     throw new ApiError('UPSTREAM_UNAVAILABLE', `preview failed: ${(e as Error).message}`);
   }
 });
