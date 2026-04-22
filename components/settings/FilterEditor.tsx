@@ -56,18 +56,18 @@ export function FilterEditor({ mode, filters, onChange, embedded }: FilterEditor
   const [stocks, setStocks] = useState<Option[]>([]);
   const [lookupErr, setLookupErr] = useState<string | null>(null);
 
-  // Prefetch markets + currencies when mode changes.
+  // Prefetch currencies when mode changes — it's a short, bounded list so a
+  // one-shot fetch gives immediate autocomplete with no per-keystroke load.
+  // Markets and stocks both fetch live as the user types.
   useEffect(() => {
     let cancelled = false;
     setLookupErr(null);
+    setMarkets([]);
+    setStocks([]);
     void (async () => {
       try {
-        const [m, c] = await Promise.all([
-          uiFetch<{ markets: Option[] }>(`/api/ui/lookup/markets?mode=${mode}`),
-          uiFetch<{ currencies: Option[] }>(`/api/ui/lookup/currencies?mode=${mode}`),
-        ]);
+        const c = await uiFetch<{ currencies: Option[] }>(`/api/ui/lookup/currencies?mode=${mode}`);
         if (cancelled) return;
-        setMarkets(m.markets);
         setCurrencies(c.currencies);
       } catch (e) {
         if (cancelled) return;
@@ -97,10 +97,15 @@ export function FilterEditor({ mode, filters, onChange, embedded }: FilterEditor
 
       <AxisRow
         title="Markets"
-        hint="e.g. BVB — leave empty for no market restriction"
+        hint="Type to search (e.g. BVB). Leave empty for no market restriction."
         options={markets}
         filter={filters.markets}
         onChange={(side, next) => setAxis('markets', side, next)}
+        onQueryChange={(q) => {
+          if (!q) { setMarkets([]); return; }
+          void searchMarkets(mode, q).then(setMarkets).catch(() => { /* silent */ });
+        }}
+        live
       />
       <AxisRow
         title="Currencies"
@@ -125,27 +130,42 @@ export function FilterEditor({ mode, filters, onChange, embedded }: FilterEditor
   );
 }
 
-let instrumentReqSeq = 0;
-const instrumentDebounce: { t: ReturnType<typeof setTimeout> | null } = { t: null };
-
-async function searchInstruments(mode: Mode, q: string): Promise<Option[]> {
-  // Debounce 200 ms — BT's search tolerates this well.
-  return new Promise<Option[]>((resolve) => {
-    if (instrumentDebounce.t) clearTimeout(instrumentDebounce.t);
-    const mySeq = ++instrumentReqSeq;
-    instrumentDebounce.t = setTimeout(async () => {
+/**
+ * Build a per-endpoint debounced search function. Each picker gets its own
+ * closure so concurrent typing in two pickers (e.g. markets and stocks) can't
+ * race each other's responses: the sequence counter and timer live per-call-site.
+ */
+function makeDebouncedSearch<T>(
+  buildUrl: (mode: Mode, q: string) => string,
+  pick: (body: Record<string, unknown>) => T[],
+  debounceMs = 200,
+) {
+  let seq = 0;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  return (mode: Mode, q: string): Promise<T[]> => new Promise<T[]>((resolve) => {
+    if (timer) clearTimeout(timer);
+    const mySeq = ++seq;
+    timer = setTimeout(async () => {
       try {
-        const res = await uiFetch<{ instruments: Option[] }>(
-          `/api/ui/lookup/instruments?mode=${mode}&q=${encodeURIComponent(q)}`,
-        );
-        if (mySeq !== instrumentReqSeq) return; // a newer request superseded
-        resolve(res.instruments);
+        const res = await uiFetch<Record<string, unknown>>(buildUrl(mode, q));
+        if (mySeq !== seq) return; // a newer request superseded
+        resolve(pick(res));
       } catch {
         resolve([]);
       }
-    }, 200);
+    }, debounceMs);
   });
 }
+
+const searchMarkets = makeDebouncedSearch<Option>(
+  (mode, q) => `/api/ui/lookup/markets?mode=${mode}&q=${encodeURIComponent(q)}`,
+  (r) => (r.markets as Option[] | undefined) ?? [],
+);
+
+const searchInstruments = makeDebouncedSearch<Option>(
+  (mode, q) => `/api/ui/lookup/instruments?mode=${mode}&q=${encodeURIComponent(q)}`,
+  (r) => (r.instruments as Option[] | undefined) ?? [],
+);
 
 interface AxisRowProps {
   title: string;

@@ -1,9 +1,12 @@
 /**
- * GET /api/ui/lookup/markets?mode=demo|live
+ * GET /api/ui/lookup/markets?mode=demo|live[&q=PREFIX]
  *
  * Returns the list of market codes available to this tenant, for use as
  * autocomplete options in the API-key filters UI. Results are pulled from
  * `client.markets.list()` and reshaped to `{ code, label }[]`.
+ *
+ * With `?q=PREFIX` the response is filtered (case-insensitive substring
+ * match on code or label). Omit `q` to get the full list.
  *
  * Firebase-authed (it's a browser-facing endpoint). Requires an active BT
  * session for the mode — if the user hasn't signed in to BT yet, the
@@ -51,10 +54,15 @@ export const GET = withRoute(async (req) => {
     throw new ApiError('BAD_REQUEST', 'mode query param must be "demo" or "live"');
   }
   const mode = modeRaw as BtMode;
+  const q = (req.nextUrl.searchParams.get('q') ?? '').trim().toLowerCase();
+
   const client = await getBtClient(caller.tenant, mode);
   try {
-    const markets = await client.markets.list();
-    return ok({ mode, markets: reshape(markets) });
+    const all = reshape(await client.markets.list());
+    const markets = q
+      ? all.filter((m) => m.code.toLowerCase().includes(q) || m.label.toLowerCase().includes(q))
+      : all;
+    return ok({ mode, markets });
   } catch (e) {
     throw new ApiError('UPSTREAM_UNAVAILABLE', `markets.list failed: ${(e as Error).message}`);
   }
