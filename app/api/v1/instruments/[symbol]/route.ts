@@ -24,6 +24,7 @@
 
 import { requireApiKey } from '@/lib/auth/api-key';
 import { runWithSession } from '@/lib/bt/client-pool';
+import { getMarketsCache } from '@/lib/bt/markets-cache';
 import { getPortfolioKey } from '@/lib/bt/portfolio-key';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
@@ -49,18 +50,21 @@ export const GET = withRoute<{ symbol: string }>(async (req, { params }) => {
       caller.tenant,
       caller.mode,
       async (client) => {
-        const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
-        const hits = (await client.markets.searchInstrument(symbol)) as Hit[];
+        const [portfolioKey, hits, marketsCache] = await Promise.all([
+          getPortfolioKey(caller.tenant, caller.mode, client),
+          client.markets.searchInstrument(symbol) as Promise<Hit[]>,
+          getMarketsCache(caller.tenant, caller.mode, client),
+        ]);
         if (!Array.isArray(hits) || hits.length === 0) {
           throw new ApiError('NOT_FOUND', `Instrument not found: ${symbol}`);
         }
 
         // Filter the full list of listings by markets + currencies + stocks
-        // axes. `stocks` was already checked up-front on the raw symbol, but
-        // running it here too is harmless and keeps the listing semantics
-        // consistent (if a caller ever queries under an alias that rewrites
-        // to a different code, this is the last line of defense).
-        const allowed = filterRecords(hits as unknown[], caller.filters, readRecordFields) as Hit[];
+        // axes. Threading the markets cache so a hit with {market: "REGS",
+        // marketId: 1} canonicalizes to "BVB" for matching. `stocks` was
+        // already checked up-front on the raw symbol.
+        const read = (r: unknown) => readRecordFields(r, { marketsCache });
+        const allowed = filterRecords(hits as unknown[], caller.filters, read) as Hit[];
         if (allowed.length === 0) {
           throw new ApiError(
             'FORBIDDEN',
@@ -102,13 +106,15 @@ export const GET = withRoute<{ symbol: string }>(async (req, { params }) => {
           marketId: pick.marketId,
           instrument: inst,
           instruments: allowed,
+          marketsCache,
         };
       },
     );
 
     // Belt-and-braces: if the detail payload carries a currency/market field
-    // that wasn't visible at search time, re-check it.
-    assertAllowed(caller.filters, readRecordFields(instrument));
+    // that wasn't visible at search time, re-check it — using the cache so
+    // "REGS" on the detail still canonicalizes to "BVB".
+    assertAllowed(caller.filters, readRecordFields(instrument, { marketsCache }));
 
     return ok({
       mode: caller.mode,

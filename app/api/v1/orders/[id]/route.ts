@@ -16,6 +16,7 @@
 
 import { requireApiKey } from '@/lib/auth/api-key';
 import { runWithSession } from '@/lib/bt/client-pool';
+import { getMarketsCache } from '@/lib/bt/markets-cache';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
 import { assertAllowed, readRecordFields } from '@/lib/filters';
@@ -29,16 +30,23 @@ export const GET = withRoute<{ id: string }>(async (req, { params }) => {
   if (!id) throw new ApiError('BAD_REQUEST', 'order id path segment required');
 
   try {
-    const { order, history, actions } = await runWithSession(caller.tenant, caller.mode, async (client) => {
-      const [o, h, a] = await Promise.all([
-        client.orders.get(id),
-        client.orders.getHistory(id).catch(() => null),
-        client.orders.getActions(id).catch(() => null),
-      ]);
-      return { order: o, history: h, actions: a };
-    });
-    // Hide orders that belong to an axis the key can't see.
-    assertAllowed(caller.filters, readRecordFields(order));
+    const { order, history, actions, marketsCache } = await runWithSession(
+      caller.tenant,
+      caller.mode,
+      async (client) => {
+        const [o, h, a, mc] = await Promise.all([
+          client.orders.get(id),
+          client.orders.getHistory(id).catch(() => null),
+          client.orders.getActions(id).catch(() => null),
+          getMarketsCache(caller.tenant, caller.mode, client),
+        ]);
+        return { order: o, history: h, actions: a, marketsCache: mc };
+      },
+    );
+    // Hide orders that belong to an axis the key can't see. The markets cache
+    // canonicalizes Order.Market (which may be a segment code like "REGS") to
+    // "BVB" via the record's MarketId before matching.
+    assertAllowed(caller.filters, readRecordFields(order, { marketsCache }));
     return ok({ mode: caller.mode, order, history, actions });
   } catch (e) {
     if (e instanceof ApiError) throw e;
