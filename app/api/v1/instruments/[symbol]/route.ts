@@ -46,7 +46,7 @@ export const GET = withRoute<{ symbol: string }>(async (req, { params }) => {
   const overrideMarketId = req.nextUrl.searchParams.get('marketId');
 
   try {
-    const { code, marketId, instrument, instruments } = await runWithSession(
+    const { code, marketId, instrument, instruments, marketsCache } = await runWithSession(
       caller.tenant,
       caller.mode,
       async (client) => {
