@@ -31,12 +31,16 @@ import type { ApiKeyFilters, FilterAxis } from './firestore';
 
 export type FilterAxisName = 'markets' | 'currencies' | 'stocks';
 
-const EMPTY_AXIS: FilterAxis = { include: [], exclude: [] };
+// Each axis gets its own FilterAxis instance so accidental mutation on one
+// axis (e.g. `EMPTY_FILTERS.markets.include.push(...)`) can't bleed through
+// to currencies or stocks. Cheap insurance.
+const emptyAxis = (): FilterAxis => ({ include: [], exclude: [] });
+const EMPTY_AXIS: FilterAxis = emptyAxis();
 
 export const EMPTY_FILTERS: ApiKeyFilters = {
-  markets: EMPTY_AXIS,
-  currencies: EMPTY_AXIS,
-  stocks: EMPTY_AXIS,
+  markets: emptyAxis(),
+  currencies: emptyAxis(),
+  stocks: emptyAxis(),
 };
 
 function norm(s: unknown): string | null {

@@ -63,6 +63,26 @@ function nameOf(h: Holding): string | undefined {
   return typeof v === 'string' && v.trim() ? v.trim() : undefined;
 }
 
+/**
+ * Format a P&L amount + optional cost-basis for the holdings table. Returns
+ * both the display text and the CSS color — used identically on each row and
+ * on the footer total.
+ */
+function formatPnl(pnl: number | undefined, cost: number | undefined, ccy = 'RON'): {
+  text: string;
+  color: string | undefined;
+} {
+  if (pnl == null || !Number.isFinite(pnl)) return { text: '—', color: undefined };
+  const sign = pnl >= 0 ? '+' : '';
+  const pct = cost && cost !== 0
+    ? ` (${sign}${((pnl / cost) * 100).toFixed(2)}%)`
+    : '';
+  const color = pnl > 0 ? 'var(--ok, #4caf50)'
+    : pnl < 0 ? 'var(--err, #f44336)'
+    : undefined;
+  return { text: `${sign}${formatMoney(pnl, ccy)}${pct}`, color };
+}
+
 export function AccountSnapshot() {
   const { mode } = useMode();
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
@@ -185,18 +205,17 @@ export function AccountSnapshot() {
               <label>Total value</label>
               <span className="mono">{formatMoney(totalMv || null)}</span>
             </div>
-            {totalPnl !== 0 && totalCost !== 0 && (
-              <div>
-                <label>Unrealized P&amp;L</label>
-                <span
-                  className="mono"
-                  style={{ color: totalPnl > 0 ? 'var(--ok, #4caf50)' : totalPnl < 0 ? 'var(--err, #f44336)' : undefined }}
-                >
-                  {totalPnl >= 0 ? '+' : ''}{formatMoney(totalPnl)}
-                  {totalCost ? ` (${totalPnl >= 0 ? '+' : ''}${((totalPnl / totalCost) * 100).toFixed(2)}%)` : ''}
-                </span>
-              </div>
-            )}
+            {totalPnl !== 0 && totalCost !== 0 && (() => {
+              const display = formatPnl(totalPnl, totalCost);
+              return (
+                <div>
+                  <label>Unrealized P&amp;L</label>
+                  <span className="mono" style={{ color: display.color }}>
+                    {display.text}
+                  </span>
+                </div>
+              );
+            })()}
             {loadedAt && (
               <div style={{ marginLeft: 'auto' }}>
                 <span className="dim" style={{ fontSize: '0.8rem' }}>as of {loadedAt}</span>
@@ -225,10 +244,8 @@ export function AccountSnapshot() {
                     ? h.averagePrice * h.quantity : undefined;
                   const mv = typeof h.marketValue === 'number' ? h.marketValue : undefined;
                   const weight = mv !== undefined && totalMv > 0 ? (mv / totalMv) * 100 : undefined;
-                  const pnlColor = pnl !== undefined
-                    ? (pnl > 0 ? 'var(--ok, #4caf50)' : pnl < 0 ? 'var(--err, #f44336)' : undefined)
-                    : undefined;
                   const ccy = typeof h.currency === 'string' && h.currency ? h.currency : 'RON';
+                  const pnlDisplay = formatPnl(pnl, cost, ccy);
                   const longName = nameOf(h);
                   return (
                     <tr key={`${h.symbol ?? 'row'}-${i}`} style={{ borderBottom: '1px solid var(--border, #222)' }}>
@@ -256,39 +273,32 @@ export function AccountSnapshot() {
                       <td style={{ textAlign: 'right', padding: '0.4rem 0.5rem' }} className="mono dim">
                         {weight !== undefined ? `${weight.toFixed(1)}%` : '—'}
                       </td>
-                      <td style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: pnlColor }} className="mono">
-                        {pnl !== undefined
-                          ? `${pnl >= 0 ? '+' : ''}${formatMoney(pnl, ccy)}${cost ? ` (${pnl >= 0 ? '+' : ''}${((pnl / cost) * 100).toFixed(2)}%)` : ''}`
-                          : '—'}
+                      <td style={{ textAlign: 'right', padding: '0.4rem 0.5rem', color: pnlDisplay.color }} className="mono">
+                        {pnlDisplay.text}
                       </td>
                     </tr>
                   );
                 })}
               </tbody>
-              {(totalMv > 0 || totalPnl !== 0) && (
-                <tfoot>
-                  <tr style={{ borderTop: '2px solid var(--border, #333)', fontWeight: 600 }}>
-                    <td style={{ padding: '0.5rem' }} colSpan={5}>Total</td>
-                    <td style={{ textAlign: 'right', padding: '0.5rem' }} className="mono">
-                      {formatMoney(totalMv || null)}
-                    </td>
-                    <td style={{ textAlign: 'right', padding: '0.5rem' }} className="mono dim">
-                      {totalMv > 0 ? '100.0%' : '—'}
-                    </td>
-                    <td
-                      style={{
-                        textAlign: 'right', padding: '0.5rem',
-                        color: totalPnl > 0 ? 'var(--ok, #4caf50)' : totalPnl < 0 ? 'var(--err, #f44336)' : undefined,
-                      }}
-                      className="mono"
-                    >
-                      {totalPnl !== 0
-                        ? `${totalPnl >= 0 ? '+' : ''}${formatMoney(totalPnl)}${totalCost ? ` (${totalPnl >= 0 ? '+' : ''}${((totalPnl / totalCost) * 100).toFixed(2)}%)` : ''}`
-                        : '—'}
-                    </td>
-                  </tr>
-                </tfoot>
-              )}
+              {(totalMv > 0 || totalPnl !== 0) && (() => {
+                const totalPnlDisplay = formatPnl(totalPnl || undefined, totalCost || undefined);
+                return (
+                  <tfoot>
+                    <tr style={{ borderTop: '2px solid var(--border, #333)', fontWeight: 600 }}>
+                      <td style={{ padding: '0.5rem' }} colSpan={5}>Total</td>
+                      <td style={{ textAlign: 'right', padding: '0.5rem' }} className="mono">
+                        {formatMoney(totalMv || null)}
+                      </td>
+                      <td style={{ textAlign: 'right', padding: '0.5rem' }} className="mono dim">
+                        {totalMv > 0 ? '100.0%' : '—'}
+                      </td>
+                      <td style={{ textAlign: 'right', padding: '0.5rem', color: totalPnlDisplay.color }} className="mono">
+                        {totalPnlDisplay.text}
+                      </td>
+                    </tr>
+                  </tfoot>
+                );
+              })()}
             </table>
           )}
 

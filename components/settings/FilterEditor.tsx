@@ -12,7 +12,7 @@
 
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { uiFetch } from '@/lib/ui-client';
 
 export type Mode = 'demo' | 'live';
@@ -220,12 +220,13 @@ interface ChipPickerProps {
   strict?: boolean;
 }
 
-let pickerSeq = 0;
-
 function ChipPicker({ label, placeholder, options, values, onChange, onQueryChange, strict }: ChipPickerProps) {
   const [text, setText] = useState('');
   const [err, setErr] = useState<string | null>(null);
-  const listId = useMemo(() => `picker-list-${++pickerSeq}`, []);
+  // Pair the <input> with its <datalist> via a React-stable id — avoids the
+  // SSR/HMR hazard of a module-level counter, which could drift across
+  // server/client renders or reset mid-session on hot-reload.
+  const listId = useId();
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   function commit(raw: string) {
