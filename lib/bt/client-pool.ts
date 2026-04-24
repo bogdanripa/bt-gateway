@@ -271,6 +271,12 @@ export function isSessionExpired(e: unknown): boolean {
  * with a freshly-built client if the first attempt fails because the
  * session died (bt-trade's refresh-after-401 gave up).
  *
+ * ONLY SAFE FOR IDEMPOTENT READS. A mutation (place/cancel order, etc.)
+ * that hits 401 after BT has accepted it but before the response lands
+ * would get retried and double-submit — BT has no idempotency key. Use
+ * `runWithSessionMutating` for mutations; it rebuilds the session up-front
+ * (if needed) but does not retry the operation after it starts.
+ *
  * The rebuild goes through `getBtClient` → `buildClient` → `login()`, which
  * blocks up to 5 minutes waiting for an OTP to be posted to the tenant's
  * ntfy topic. Callers that can't tolerate that wait should call
@@ -297,6 +303,26 @@ export async function runWithSession<T>(
     const fresh = await getBtClient(tenant, mode);
     return op(fresh);
   }
+}
+
+/**
+ * Mutation-safe variant of `runWithSession`.
+ *
+ * If the session is already dead when we go to fetch the client,
+ * `buildClient` will rebuild it (triggering the OTP wait as needed).
+ * However, once `op` has started we do NOT retry on session expiry — a
+ * mid-flight 401 on a POST may represent "BT accepted the order, then the
+ * response path lost auth", and retrying would double-submit. BT has no
+ * idempotency key, so we bubble the AuthError up as a 502 and let the
+ * caller decide whether to retry manually after checking state.
+ */
+export async function runWithSessionMutating<T>(
+  tenant: TenantRef,
+  mode: BtMode,
+  op: (client: BTTradeClient) => Promise<T>,
+): Promise<T> {
+  const client = await getBtClient(tenant, mode);
+  return op(client);
 }
 
 /**

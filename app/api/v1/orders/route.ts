@@ -27,7 +27,7 @@
 
 import { z } from 'zod';
 import { requireApiKey } from '@/lib/auth/api-key';
-import { runWithSession } from '@/lib/bt/client-pool';
+import { runWithSession, runWithSessionMutating } from '@/lib/bt/client-pool';
 import { getMarketsCache } from '@/lib/bt/markets-cache';
 import { getPortfolioKey } from '@/lib/bt/portfolio-key';
 import { ok, withRoute } from '@/lib/route-handler';
@@ -71,7 +71,10 @@ export const POST = withRoute(async (req, { requestId }) => {
   let marketId = args.marketId;
   let result: unknown;
   try {
-    result = await runWithSession(caller.tenant, caller.mode, async (client) => {
+    // Mutating path: no auto-retry on session expiry mid-flight. If BT
+    // accepted the order but returned 401 on the way back, retrying would
+    // double-submit (BT has no idempotency key).
+    result = await runWithSessionMutating(caller.tenant, caller.mode, async (client) => {
       const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
       // Always call searchInstrument so we know the resolved market + currency
       // to enforce the filter against — even when the caller supplied marketId
