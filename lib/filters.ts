@@ -97,7 +97,16 @@ export function isAllowedOn(
 
 /**
  * Strict check: throws `FORBIDDEN` when any provided picks fail their axis.
- * Pass `undefined` for fields the caller didn't specify — those are skipped.
+ *
+ * Semantics for a `null`/`undefined` pick on an axis that HAS an include
+ * list: fail-closed. If the caller can't prove the axis value and the key
+ * is restricted to a specific allowlist, it's not permitted. This matches
+ * `isAllowedOn`'s strict-reject-on-unknown behavior — otherwise a caller
+ * with `markets.include=[BVB]` could bypass the market gate by placing an
+ * order against a searchInstrument hit that omits `.market` (e.g. some BT
+ * response shapes only populate marketId).
+ *
+ * Axes with no constraints (empty include and exclude) always pass.
  *
  * Use this at the top of every mutating route (POST orders, preview, journal
  * append, fill append) after parsing the body, and at single-resource reads
@@ -113,15 +122,15 @@ export function assertAllowed(
     ['stocks', picks.symbol],
   ];
   for (const [axis, v] of checks) {
-    if (v == null) continue;
     const a = axisOf(filters, axis);
     if (!hasConstraints(a)) continue;
     if (!isAllowedOn(filters, axis, v)) {
       const label = axis === 'stocks' ? 'symbol' : axis.replace(/s$/, '');
+      const displayValue = v ?? '<unknown>';
       throw new ApiError(
         'FORBIDDEN',
-        `This API key is not permitted to access ${label}=${v}`,
-        { context: { axis, value: v } },
+        `This API key is not permitted to access ${label}=${displayValue}`,
+        { context: { axis, value: v ?? null } },
       );
     }
   }
