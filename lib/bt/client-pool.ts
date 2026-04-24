@@ -146,6 +146,12 @@ async function buildClient(t: TenantRef, mode: BtMode): Promise<PoolEntry> {
     },
   });
 
+  // Kill bt-trade's internal auto-refresh timer before any login/restore
+  // runs. Our cron + transport 401-retry cover both token types; an
+  // internal third driver was racing both (see git history for the
+  // zombie-refresh invalid_grant cascade).
+  disableAutoRefresh(client);
+
   // Try to restore a persisted snapshot. If it works, we skip the full
   // login (and the OTP prompt). If the refresh token has already expired
   // server-side, the first request will 401 → transport refresh fails →
@@ -291,6 +297,50 @@ export async function runWithSession<T>(
     const fresh = await getBtClient(tenant, mode);
     return op(fresh);
   }
+}
+
+/**
+ * Neuter bt-trade's internal access-token auto-refresh timer on this client.
+ *
+ * Why: bt-trade schedules an internal `setTimeout` auto-refresh on every
+ * successful login/restore/refresh. On throwaway clients (e.g. the cron's)
+ * that timer keeps the client alive past its intended lifetime and later
+ * fires using the refresh_token the client had in memory at that time —
+ * which by then may have been rotated (and consumed) by a parallel refresh.
+ * BT returns `invalid_grant` and we spiral into full-login OTP prompts.
+ *
+ * The transport's 401-retry-with-refresh already keeps access tokens fresh
+ * on user traffic, and our cron keeps the refresh token itself alive. A
+ * third refresh driver is just extra race surface.
+ *
+ * Clears any currently-scheduled timer and wraps `auth.refresh()` so
+ * future refreshes (from 401-retry or explicit refresh) don't leave a
+ * new timer behind either. Single-underscore `_refreshTimer` is exposed
+ * (not `#`-private in bt-trade 0.3.1).
+ */
+export function disableAutoRefresh(client: BTTradeClient): void {
+  type AuthShape = {
+    _refreshTimer: ReturnType<typeof setTimeout> | null;
+    refresh(): Promise<void>;
+  };
+  const auth = (client as unknown as { auth: AuthShape }).auth;
+
+  const clearTimer = () => {
+    if (auth._refreshTimer) {
+      clearTimeout(auth._refreshTimer);
+      auth._refreshTimer = null;
+    }
+  };
+
+  clearTimer();
+  const original = auth.refresh.bind(auth);
+  auth.refresh = async function () {
+    try {
+      await original();
+    } finally {
+      clearTimer();
+    }
+  };
 }
 
 /** Test hook. */
