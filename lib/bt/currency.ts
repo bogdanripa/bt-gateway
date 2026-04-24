@@ -36,6 +36,11 @@ import { ApiError } from '../errors';
 import type { BTTradeClient } from '@bogdanripa/bt-trade';
 import type { BtMode, TenantRef } from '../firestore';
 
+export interface EvalCurrency {
+  id: number | string;
+  name: string;
+}
+
 const cache = new Map<string, number>();
 
 function cacheKey(t: TenantRef, mode: BtMode): string {
@@ -56,6 +61,40 @@ function isRonCurrency(name: unknown): boolean {
 }
 
 /**
+ * Enumerate every evaluation currency the selected account's portfolios
+ * support. This is the canonical source for any cash call: each id returned
+ * is guaranteed to be accepted by BT's `getCash`, because BT emitted it on
+ * this account's own portfolio list.
+ *
+ * Used directly by `/api/v1/cash` (to iterate all currencies) and
+ * indirectly by `getEvaluationCurrencyId` (which picks RON or the default).
+ *
+ * Returns `[]` if the account has no portfolios or no currencies. The
+ * caller decides how to handle empty (cash route throws, the resolver
+ * falls through to the profile/nomenclature paths).
+ */
+export async function listEvaluationCurrencies(
+  client: BTTradeClient,
+): Promise<EvalCurrency[]> {
+  const accounts = await client.accounts.list();
+  const account =
+    accounts.find((a) => a.selected) ??
+    accounts.find((a) => a.allowTrading) ??
+    accounts[0];
+  if (!account) return [];
+
+  const byId = new Map<string | number, EvalCurrency>();
+  for (const p of account.portfolios ?? []) {
+    for (const c of p.currencies ?? []) {
+      if (c.id === undefined || c.id === null || c.id === '') continue;
+      const name = typeof c.name === 'string' && c.name.trim() ? c.name.trim() : String(c.id);
+      if (!byId.has(c.id)) byId.set(c.id, { id: c.id, name });
+    }
+  }
+  return [...byId.values()];
+}
+
+/**
  * Returns the evaluation-currency id to use for this tenant + mode. Tries
  * the per-portfolio currencies first (reliable), then the profile, then
  * the global nomenclature (historical last resort).
@@ -69,34 +108,15 @@ export async function getEvaluationCurrencyId(
   const hit = cache.get(k);
   if (hit) return hit;
 
-  // 1. Per-portfolio currencies (the reliable path). Use the same account
-  //    picker as portfolio-key.ts so the resolved currency id is guaranteed
-  //    valid for whatever portfolio we'll call getCash against.
+  // 1. Per-portfolio currencies (the reliable path). Prefer RON, else the
+  //    BT web app's default (first portfolio's first currency).
   try {
-    const accounts = await client.accounts.list();
-    const account =
-      accounts.find((a) => a.selected) ??
-      accounts.find((a) => a.allowTrading) ??
-      accounts[0];
-
-    if (account) {
-      for (const p of account.portfolios ?? []) {
-        const ccs = Array.isArray(p.currencies) ? p.currencies : [];
-        const ron = ccs.find((c) => isRonCurrency(c.name));
-        const chosen = ron?.id;
-        const id = validId(chosen);
-        if (id) {
-          cache.set(k, id);
-          return id;
-        }
-      }
-
-      // No RON on any portfolio — use the web app's default pick.
-      const def = validId(client.accounts.defaultCurrencyId(account));
-      if (def) {
-        cache.set(k, def);
-        return def;
-      }
+    const currencies = await listEvaluationCurrencies(client);
+    const ron = currencies.find((c) => isRonCurrency(c.name));
+    const chosenId = validId(ron?.id ?? currencies[0]?.id);
+    if (chosenId) {
+      cache.set(k, chosenId);
+      return chosenId;
     }
   } catch (e) {
     console.warn(

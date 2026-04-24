@@ -25,6 +25,7 @@
 
 import { requireApiKey } from '@/lib/auth/api-key';
 import { isSessionExpired, runWithSession } from '@/lib/bt/client-pool';
+import { listEvaluationCurrencies, type EvalCurrency } from '@/lib/bt/currency';
 import { getPortfolioKey } from '@/lib/bt/portfolio-key';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
@@ -49,11 +50,6 @@ function cashCurrency(entry: unknown): string | undefined {
   return typeof direct === 'string' && direct.trim() ? direct.trim() : undefined;
 }
 
-interface EvalCurrency {
-  id: string | number;
-  name: string;
-}
-
 export const GET = withRoute(async (req) => {
   const caller = await requireApiKey(req);
 
@@ -62,29 +58,12 @@ export const GET = withRoute(async (req) => {
   const { portfolioKey, cash, errors } = await runWithSession(caller.tenant, caller.mode, async (client) => {
     const pk = await getPortfolioKey(caller.tenant, caller.mode, client);
 
-    // Collect the full set of evaluation currencies supported on this account's
-    // portfolios. Using the per-account list (not the global nomenclature)
-    // guarantees every currencyId we pass is accepted by BT — the global
-    // nomenclature's IDs differ per-portfolio and were the source of the
-    // earlier "Moneda solicitata pe portofoliul SPOT nu este disponibila" bug.
-    const accounts = await client.accounts.list();
-    const account =
-      accounts.find((a) => a.selected) ??
-      accounts.find((a) => a.allowTrading) ??
-      accounts[0];
-    if (!account) {
-      throw new ApiError('UPSTREAM_UNAVAILABLE', 'No BT accounts available for this session');
-    }
-
-    const byId = new Map<string | number, EvalCurrency>();
-    for (const p of account.portfolios ?? []) {
-      for (const c of p.currencies ?? []) {
-        if (c.id === undefined || c.id === null || c.id === '') continue;
-        const name = typeof c.name === 'string' && c.name.trim() ? c.name.trim() : String(c.id);
-        if (!byId.has(c.id)) byId.set(c.id, { id: c.id, name });
-      }
-    }
-    if (byId.size === 0) {
+    // Canonical per-portfolio currency list — IDs here are guaranteed to be
+    // accepted by BT (the global nomenclature's IDs differ per-portfolio and
+    // were the source of the earlier "Moneda solicitata pe portofoliul SPOT
+    // nu este disponibila" bug).
+    const currencies = await listEvaluationCurrencies(client);
+    if (currencies.length === 0) {
       throw new ApiError(
         'UPSTREAM_UNAVAILABLE',
         'No evaluation currencies available on this portfolio',
@@ -95,7 +74,7 @@ export const GET = withRoute(async (req) => {
     // Pre-filter by the API key's currency rules. Saves a BT call per currency
     // the caller can't see anyway.
     const toFetch: EvalCurrency[] = [];
-    for (const c of byId.values()) {
+    for (const c of currencies) {
       if (isAllowedOn(caller.filters, 'currencies', c.name)) toFetch.push(c);
     }
 
