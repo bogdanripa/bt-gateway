@@ -117,3 +117,56 @@ export async function getBotProfile(
     return null;
   }
 }
+
+/**
+ * What Telegram itself thinks of the bot's webhook. Lets the settings UI
+ * surface "is the URL Telegram has the one I expect?", "are updates piling
+ * up?", and "did my webhook return an error last time Telegram tried?" —
+ * without which a broken webhook looks indistinguishable from a bot that
+ * just isn't replying.
+ *
+ * Returns null on any failure — never throws.
+ */
+export interface WebhookInfo {
+  url: string;
+  pendingUpdateCount: number;
+  lastErrorDate?: string;
+  lastErrorMessage?: string;
+  ipAddress?: string;
+  maxConnections?: number;
+}
+
+export async function getWebhookInfo(botToken: string): Promise<WebhookInfo | null> {
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${botToken}/getWebhookInfo`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as {
+      ok: boolean;
+      result?: {
+        url: string;
+        pending_update_count: number;
+        last_error_date?: number;
+        last_error_message?: string;
+        ip_address?: string;
+        max_connections?: number;
+      };
+    };
+    if (!body.ok || !body.result) return null;
+    const r = body.result;
+    return {
+      url: r.url,
+      pendingUpdateCount: r.pending_update_count,
+      lastErrorDate: r.last_error_date
+        ? new Date(r.last_error_date * 1000).toISOString()
+        : undefined,
+      lastErrorMessage: r.last_error_message,
+      ipAddress: r.ip_address,
+      maxConnections: r.max_connections,
+    };
+  } catch {
+    return null;
+  }
+}

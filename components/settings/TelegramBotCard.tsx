@@ -12,10 +12,21 @@
 import { useEffect, useState } from 'react';
 import { uiFetch } from '@/lib/ui-client';
 
+interface WebhookInfo {
+  url: string;
+  matches: boolean;
+  pendingUpdateCount: number;
+  lastErrorDate?: string;
+  lastErrorMessage?: string;
+  ipAddress?: string;
+}
+
 interface BotStatus {
   configured: boolean;
   username?: string;
+  webhookUrl?: string;
   webhookRegistered?: boolean;
+  webhookInfo?: WebhookInfo | null;
   updatedAt?: string;
 }
 
@@ -107,6 +118,7 @@ export function TelegramBotCard({ onChange }: { onChange?: () => void }) {
             <label>Updated</label>
             <span className="mono dim">{status.updatedAt}</span>
           </div>
+          <WebhookDiagnostics status={status} onRetry={() => { void refresh(); }} busy={busy} />
           <div className="row" style={{ gap: '0.5rem' }}>
             <button className="ghost" onClick={() => setEditing(true)} disabled={busy}>
               Replace token
@@ -147,6 +159,84 @@ export function TelegramBotCard({ onChange }: { onChange?: () => void }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Shows what Telegram thinks about our webhook so "nothing happens when I
+ * /start" is diagnosable without ssh/logs:
+ *   - URL mismatch → Telegram is delivering updates somewhere else.
+ *   - last error → our endpoint returned non-2xx on Telegram's most recent
+ *     attempt (URL typo, deploy down, wrong secret in path, etc.).
+ *   - pending count → updates backed up because the webhook is failing.
+ *   - empty/null info → Telegram refused to tell us (bad token).
+ */
+function WebhookDiagnostics({
+  status,
+  onRetry,
+  busy,
+}: {
+  status: BotStatus;
+  onRetry: () => void;
+  busy: boolean;
+}) {
+  const info = status.webhookInfo;
+  const expected = status.webhookUrl;
+
+  if (info === null || info === undefined) {
+    return (
+      <div className="notice">
+        <p>
+          <strong>Webhook status unavailable.</strong> Couldn&apos;t reach Telegram to
+          check what URL it has registered.
+        </p>
+      </div>
+    );
+  }
+
+  const hasError = !!info.lastErrorMessage;
+  const urlMismatch = !info.matches;
+  const problem = urlMismatch || hasError;
+
+  return (
+    <div className={`notice ${problem ? 'err' : ''}`}>
+      <div>
+        <label>Webhook URL (Telegram)</label>
+        <span className="mono" style={{ wordBreak: 'break-all' }}>
+          {info.url || '(none set)'}
+        </span>
+      </div>
+      {urlMismatch && expected && (
+        <div style={{ marginTop: '0.5rem' }}>
+          <label>Expected</label>
+          <span className="mono" style={{ wordBreak: 'break-all' }}>{expected}</span>
+          <p className="dim" style={{ marginTop: '0.25rem' }}>
+            Telegram has a different URL. Tap <strong>Replace token</strong> above and
+            re-save to re-register this URL, or paste the same token to refresh.
+          </p>
+        </div>
+      )}
+      <div style={{ marginTop: '0.5rem' }}>
+        <label>Pending updates</label>
+        <span className="mono">{info.pendingUpdateCount}</span>
+      </div>
+      {hasError && (
+        <div style={{ marginTop: '0.5rem' }}>
+          <label>Last delivery error</label>
+          <span className="mono">{info.lastErrorMessage}</span>
+          {info.lastErrorDate && (
+            <span className="mono dim" style={{ marginLeft: '0.5rem' }}>
+              at {info.lastErrorDate}
+            </span>
+          )}
+        </div>
+      )}
+      <div className="row" style={{ marginTop: '0.5rem' }}>
+        <button className="ghost" onClick={onRetry} disabled={busy}>
+          Refresh
+        </button>
+      </div>
     </div>
   );
 }

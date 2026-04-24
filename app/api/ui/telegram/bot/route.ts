@@ -28,8 +28,8 @@ import {
 } from '@/lib/firestore';
 import { ApiError } from '@/lib/errors';
 import { ok, withRoute } from '@/lib/route-handler';
-import { encrypt } from '@/lib/kms';
-import { getBotProfile, setWebhook } from '@/lib/telegram-bot';
+import { decrypt, encrypt } from '@/lib/kms';
+import { getBotProfile, getWebhookInfo, setWebhook } from '@/lib/telegram-bot';
 import { audit } from '@/lib/events';
 
 export const runtime = 'nodejs';
@@ -65,11 +65,29 @@ export const GET = withRoute(async (req) => {
   const caller = await requireFirebaseUser(req);
   const bot = await getTelegramBot(caller.tenant);
   if (!bot) return ok({ configured: false });
+  const expectedUrl = webhookUrl(req, bot.webhookSecret);
+
+  // Ask Telegram what it thinks about the webhook so the UI can show whether
+  // Telegram has the URL we expect and surface last-delivery errors. The
+  // token is decrypted only in-memory and never returned in the response.
+  const token = await decrypt(bot.tokenCipher).catch(() => '');
+  const webhookInfo = token ? await getWebhookInfo(token) : null;
+
   return ok({
     configured: true,
     username: bot.username,
-    webhookUrl: webhookUrl(req, bot.webhookSecret),
+    webhookUrl: expectedUrl,
     updatedAt: bot.updatedAt,
+    webhookInfo: webhookInfo
+      ? {
+          url: webhookInfo.url,
+          matches: webhookInfo.url === expectedUrl,
+          pendingUpdateCount: webhookInfo.pendingUpdateCount,
+          lastErrorDate: webhookInfo.lastErrorDate,
+          lastErrorMessage: webhookInfo.lastErrorMessage,
+          ipAddress: webhookInfo.ipAddress,
+        }
+      : null,
   });
 });
 

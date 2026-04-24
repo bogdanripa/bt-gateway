@@ -55,10 +55,47 @@ interface TgUpdate {
 const okAck = () => NextResponse.json({ ok: true });
 
 export const POST = withRoute<{ secret: string }>(async (req, { params, requestId }) => {
-  const bot = params.secret
-    ? await findTelegramBotByWebhookSecret(params.secret).catch(() => null)
-    : null;
-  if (!bot) return okAck(); // no bot matches this secret — drop silently
+  if (!params.secret) {
+    console.warn(
+      JSON.stringify({
+        severity: 'WARNING',
+        msg: 'telegram.webhook_missing_secret',
+        requestId,
+      }),
+    );
+    return okAck();
+  }
+
+  // Look up the bot by its webhook secret. If the Firestore query itself
+  // fails (e.g. missing index, permissions), log loudly — a silent swallow
+  // here makes a broken webhook look identical to a stale URL.
+  let bot: Awaited<ReturnType<typeof findTelegramBotByWebhookSecret>>;
+  try {
+    bot = await findTelegramBotByWebhookSecret(params.secret);
+  } catch (e) {
+    console.error(
+      JSON.stringify({
+        severity: 'ERROR',
+        msg: 'telegram.webhook_lookup_failed',
+        requestId,
+        err: (e as Error).message,
+      }),
+    );
+    return okAck();
+  }
+  if (!bot) {
+    // No bot matches this secret. Don't leak which secrets are valid by
+    // responding differently, but do log so the user can tell (via Cloud
+    // Logging) that Telegram IS calling us, the URL is just stale.
+    console.warn(
+      JSON.stringify({
+        severity: 'WARNING',
+        msg: 'telegram.webhook_no_bot_for_secret',
+        requestId,
+      }),
+    );
+    return okAck();
+  }
 
   const t = tenantFromAuthedUid(bot.uid);
 
