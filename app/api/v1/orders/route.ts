@@ -28,6 +28,7 @@
 import { z } from 'zod';
 import { requireApiKey } from '@/lib/auth/api-key';
 import { runWithSession, runWithSessionMutating } from '@/lib/bt/client-pool';
+import { resolveInstrument } from '@/lib/bt/instruments';
 import { getMarketsCache } from '@/lib/bt/markets-cache';
 import { getPortfolioKey } from '@/lib/bt/portfolio-key';
 import { ok, withRoute } from '@/lib/route-handler';
@@ -76,36 +77,24 @@ export const POST = withRoute(async (req, { requestId }) => {
     // double-submit (BT has no idempotency key).
     result = await runWithSessionMutating(caller.tenant, caller.mode, async (client) => {
       const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
-      // Always call searchInstrument so we know the resolved market + currency
-      // to enforce the filter against — even when the caller supplied marketId
-      // explicitly. Otherwise markets.include=[BVB] could be bypassed by
-      // passing marketId for a foreign exchange, and currencies.include=[RON]
-      // could be bypassed by buying TSLA via marketId=4 (US).
-      const hits = await client.markets.searchInstrument(symbol);
-      if (!Array.isArray(hits) || hits.length === 0) {
-        throw new ApiError('NOT_FOUND', `Instrument not found: ${symbol}`);
-      }
-      type Hit = { code?: string; marketId?: string | number; market?: string; currency?: string };
-      const pick = marketId
-        ? (hits as Hit[]).find((h) => String(h.marketId) === String(marketId))
-        : (hits[0] as Hit);
-      if (!pick) {
-        throw new ApiError(
-          'NOT_FOUND',
-          `Instrument ${symbol} not listed on marketId=${marketId}`,
-        );
-      }
-      if (!pick.marketId) {
-        throw new ApiError('UPSTREAM_UNAVAILABLE', 'searchInstrument hit missing marketId');
-      }
-      marketId = pick.marketId;
-      symbol = pick.code ?? symbol;
-      assertAllowed(caller.filters, { symbol, market: pick.market, currency: pick.currency });
+      // Always resolve via searchInstrument — even when the caller supplied
+      // marketId — so the filter can bite on the resolved market + currency.
+      // Otherwise markets.include=[BVB] could be bypassed by passing a marketId
+      // for a foreign exchange, and currencies.include=[RON] could be bypassed
+      // by buying TSLA via marketId=4 (US).
+      const resolved = await resolveInstrument(client, symbol, marketId);
+      symbol = resolved.code;
+      marketId = resolved.marketId;
+      assertAllowed(caller.filters, {
+        symbol: resolved.code,
+        market: resolved.market,
+        currency: resolved.currency,
+      });
 
       return client.orders.placeOrder({
         portfolioKey,
-        symbol,
-        marketId,
+        symbol: resolved.code,
+        marketId: resolved.marketId,
         quantity: args.quantity,
         price: args.price,
         side: args.side,
