@@ -31,16 +31,6 @@ import { audit } from '../events';
 import { notifyTenant } from '../telegram';
 import { disableAutoRefresh, evictBtClient } from './client-pool';
 
-/**
- * If the current refresh token still has more headroom than this, the cron
- * skips refreshing — refreshing "just because" rotates the RT for no reason
- * and opens the door to concurrent-consumer races with user traffic. With
- * BT's 4-hour RT lifetime, this means we typically refresh once every
- * ~3h20m when idle, and not at all when user traffic is keeping the session
- * warm via the transport's 401-retry.
- */
-const CRON_REFRESH_WINDOW_MS = 40 * 60 * 1000;
-
 interface RefreshOne {
   uid: string;
   mode: BtMode;
@@ -56,27 +46,6 @@ export async function refreshTenantMode(
   const session = await getBtSession(t, mode);
   if (!session?.snapshot) {
     return { uid: t.uid, mode, status: 'skipped', message: 'no session' };
-  }
-
-  // Headroom skip: if the RT still has plenty of time left, don't refresh.
-  // BT's refresh tokens are single-use — each refresh rotates. Rotating
-  // "just because" on a cron tick risks invalidating an RT that a
-  // concurrent user call is about to use (or has just used).
-  const snap = session.snapshot as SessionSnapshot;
-  if (snap.refreshTokenExpires) {
-    const expMs = new Date(snap.refreshTokenExpires).getTime();
-    if (!Number.isNaN(expMs)) {
-      const remainMs = expMs - Date.now();
-      if (remainMs > CRON_REFRESH_WINDOW_MS) {
-        const mins = Math.round(remainMs / 60_000);
-        return {
-          uid: t.uid,
-          mode,
-          status: 'skipped',
-          message: `refresh token valid for ${mins}m (>${CRON_REFRESH_WINDOW_MS / 60_000}m headroom)`,
-        };
-      }
-    }
   }
 
   // Build a throwaway client just for the refresh. No OTP provider is ever
