@@ -31,9 +31,13 @@ export async function requireFirebaseUser(req: NextRequest): Promise<UiCaller> {
   try {
     const decoded = await adminAuth().verifyIdToken(token);
     const email = decoded.email ?? '';
-    if (!decoded.email_verified && process.env.ALLOW_UNVERIFIED_EMAIL !== '1') {
-      // Google sign-in gives us verified emails; we only hit this with
-      // email/password if you ever enable it. Fail closed.
+    // Fail closed on unverified emails. ALLOW_UNVERIFIED_EMAIL=1 is an escape
+    // hatch for local dev only — hard-refuse it in production, so a misconfigured
+    // Cloud Run env var can't silently accept unverified tokens.
+    const bypassEnabled =
+      process.env.ALLOW_UNVERIFIED_EMAIL === '1' &&
+      process.env.NODE_ENV !== 'production';
+    if (!decoded.email_verified && !bypassEnabled) {
       throw new ApiError('FORBIDDEN', 'Email not verified');
     }
     return {
