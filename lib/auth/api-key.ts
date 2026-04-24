@@ -96,11 +96,12 @@ export interface AuthenticatedCaller {
  * Find the tenant + key record that matches this raw key and return the
  * authenticated caller. Throws ApiError on any failure path.
  *
- * M2 note: this is O(tenants × keys_per_tenant). Acceptable until we have
- * many tenants because key_count will stay small per tenant. When that stops
- * being true we'll add a `key_hashes/{sha256}` index doc that maps hash →
- * (uid, kid) for constant-time lookup. Not doing it now because it adds a
- * write during key creation and a read during auth, and complicates revoke.
+ * Performance note: this is O(tenants × keys_per_tenant). Acceptable until
+ * we have many tenants because key_count will stay small per tenant. When
+ * that stops being true we'll add a `key_hashes/{sha256}` index doc that
+ * maps hash → (uid, kid) for constant-time lookup. Not doing it now because
+ * it adds a write during key creation and a read during auth, and
+ * complicates revoke.
  */
 export async function authenticateApiKey(raw: string): Promise<AuthenticatedCaller> {
   const mode = modeFromKey(raw);

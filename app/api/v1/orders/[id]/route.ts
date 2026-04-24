@@ -8,9 +8,9 @@
  *   - orders.getHistory(id)   → the state-change history
  *   - orders.getActions(id)   → what actions BT currently allows
  *
- * Cancellation is not exposed in M2 — `@bogdanripa/bt-trade@0.3.0` doesn't
- * include a cancel method yet. Actions are surfaced so the UI can show
- * "cancel available" without being able to trigger it. When the node module
+ * Cancellation is not exposed yet — `@bogdanripa/bt-trade` (through 0.3.1)
+ * doesn't include a cancel method. Actions are surfaced so the UI can show
+ * "cancel available" without being able to trigger it. When the package
  * exposes cancel we'll add DELETE on this route and emit `order.cancelled`.
  */
 

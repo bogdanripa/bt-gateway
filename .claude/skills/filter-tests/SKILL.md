@@ -79,7 +79,7 @@ Store these in shell variables that persist across scenarios (declare them in ev
 - Calls: same three as discovery, but this time with filters guaranteed empty.
 - Assertion: all calls return 200 (orders can be 502 if no session has active orders — note but don't fail). Numbers should match discovery.
 - Mark PASS if all green and `HELD_SYMBOLS` non-empty. If holdings is empty, mark INCONCLUSIVE and note that later scenarios can't validate.
-- **Known gap** (as of 2026-04-22): `/api/v1/cash` currently resolves a single evaluation currency (RON) and calls BT once, so USD/EUR cash balances never surface. If the user confirms they hold non-RON cash but the endpoint returns RON only, flag this as a bug — do not mark the scenario FAIL on that basis alone.
+- `/api/v1/cash` iterates every evaluation currency on the portfolio and flattens the balances into one array — the baseline should include every currency in `BASELINE_CASH_CURRENCIES`.
 
 ### 2. Currency only RON
 - Filters: `currencies.include = [RON]`, everything else empty.

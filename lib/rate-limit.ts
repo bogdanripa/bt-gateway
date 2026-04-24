@@ -4,8 +4,7 @@
  * 60 requests/minute per API key is the default. At our volume (1 user, maybe
  * a handful of others later) an in-memory counter on the single always-warm
  * Cloud Run instance is fine. When we scale past min-instances=1 we'll need
- * to move this to Redis or rely on request counters in Firestore — but that's
- * M-something-later, not now.
+ * to move this to Redis or rely on request counters in Firestore.
  *
  * The window is a simple "bucket of timestamps" approach: we keep the last N
  * request timestamps per key; on each call we drop ones older than the
