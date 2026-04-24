@@ -90,35 +90,38 @@ export async function refreshTenantMode(
   });
 
   // The throwaway client used in this path ONLY does a refresh — no portfolio
-  // calls, no order placement. We enable `debug: true` so bt-trade's transport
-  // layer skips its usual access-token/refresh-token redaction, and wire a log
-  // callback that forwards every `http:request`/`http:response` event to
-  // Cloud Logging as structured JSON. The resulting log lines include the
-  // full URL, method, headers, request body (`grant_type=refresh_token&…`),
-  // response status, and response body — exactly what we need for debugging
-  // an `IP diferit` / refresh failure.
+  // calls, no order placement. When BT_REFRESH_DEBUG=1 we enable bt-trade's
+  // unredacted transport logging and forward http:request/http:response as
+  // structured Cloud Logging lines (full URL, method, headers, body). That
+  // captures refresh_token values in plaintext — gated behind the env flag so
+  // normal production runs don't leak tokens to Cloud Logging (a separate IAM
+  // trust boundary from the KMS-encrypted Firestore snapshot).
   //
-  // SECURITY: this means refresh tokens appear in Cloud Logging on every
-  // cron tick. They're the same tokens already persisted (KMS-protected) in
-  // Firestore, but Cloud Logging retention is separate. Scoped to this
-  // refresh path only — the main client pool (lib/bt/client-pool.ts) keeps
-  // its existing redaction unless BT_CLIENT_DEBUG=1.
+  // Turn on when diagnosing a refresh issue via:
+  //   gcloud run services update bt-gateway \
+  //     --update-env-vars BT_REFRESH_DEBUG=1 --region=$GCP_REGION
+  // and turn off again with --remove-env-vars BT_REFRESH_DEBUG.
+  const refreshDebug = process.env.BT_REFRESH_DEBUG === '1';
   const client = new BTTradeClient({
     demo: mode === 'demo',
     otpProvider,
     timeoutMs: 20_000,
-    debug: true,
-    log: (msg, data) => {
-      if (msg !== 'http:request' && msg !== 'http:response') return;
-      console.log(JSON.stringify({
-        severity: 'INFO',
-        msg: `bt.refresh.${msg.split(':')[1]}`,
-        uid: t.uid,
-        mode,
-        requestId,
-        data,
-      }));
-    },
+    ...(refreshDebug
+      ? {
+          debug: true,
+          log: (msg, data) => {
+            if (msg !== 'http:request' && msg !== 'http:response') return;
+            console.log(JSON.stringify({
+              severity: 'INFO',
+              msg: `bt.refresh.${msg.split(':')[1]}`,
+              uid: t.uid,
+              mode,
+              requestId,
+              data,
+            }));
+          },
+        }
+      : {}),
     onSessionChange: async (snap) => {
       if (snap) await setBtSession(t, mode, snap).catch(() => { /* best-effort */ });
     },
