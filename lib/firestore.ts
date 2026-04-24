@@ -339,10 +339,68 @@ export async function deleteBtSession(t: TenantRef, mode: BtMode): Promise<void>
   await btSessionDoc(t, mode).delete().catch(() => { /* already gone */ });
 }
 
+/**
+ * Root-level index: `key_hashes/{sha256}` → { uid, keyId, mode }.
+ *
+ * Lets `authenticateApiKey` resolve a key hash to its owning doc in one
+ * Firestore point-read instead of scanning every tenant's `api_keys`
+ * collectionGroup. The authenticate path then fetches the specific
+ * `users/{uid}/api_keys/{keyId}` doc to validate mode + revokedAt + load
+ * the filter config.
+ *
+ * Write on key creation; delete on key revoke. Never exposes the key itself
+ * — the doc id IS the hash, which is the same data already present on the
+ * `api_keys` doc's `hash` field.
+ */
+interface KeyHashIndexDoc {
+  uid: string;
+  keyId: string;
+  mode: BtMode;
+}
+
+function keyHashDoc(hash: string): DocumentReference {
+  return db().collection('key_hashes').doc(hash);
+}
+
+export async function setKeyHashIndex(hash: string, uid: string, keyId: string, mode: BtMode): Promise<void> {
+  const doc: KeyHashIndexDoc = { uid, keyId, mode };
+  await keyHashDoc(hash).set(doc);
+}
+
+export async function findKeyHashIndex(hash: string): Promise<KeyHashIndexDoc | null> {
+  const snap = await keyHashDoc(hash).get();
+  return snap.exists ? (snap.data() as KeyHashIndexDoc) : null;
+}
+
+export async function deleteKeyHashIndex(hash: string): Promise<void> {
+  await keyHashDoc(hash).delete().catch(() => { /* already gone */ });
+}
+
 export async function createApiKey(t: TenantRef, doc: ApiKeyDoc): Promise<string> {
   const ref = apiKeysCol(t).doc();
   await ref.set(doc);
+  // Write the index alongside the canonical doc so auth can point-read by
+  // hash. If this write ever fails the client still has the main doc; the
+  // auth path will fall through to the collectionGroup scan.
+  await setKeyHashIndex(doc.hash, t.uid, ref.id, doc.mode).catch((e) => {
+    console.warn(JSON.stringify({
+      severity: 'WARNING',
+      msg: 'key_hash_index.create_failed',
+      uid: t.uid,
+      kid: ref.id,
+      err: (e as Error).message,
+    }));
+  });
   return ref.id;
+}
+
+/**
+ * Fetch a single ApiKey doc by (tenant, id). Used after the hash-index
+ * lookup to check mode/revokedAt/filters.
+ */
+export async function getApiKey(t: TenantRef, id: string): Promise<(ApiKeyDoc & { id: string }) | null> {
+  const snap = await apiKeysCol(t).doc(id).get();
+  return snap.exists ? { id: snap.id, ...(snap.data() as ApiKeyDoc) } : null;
 }
 
 export async function listApiKeys(t: TenantRef): Promise<Array<ApiKeyDoc & { id: string }>> {
@@ -351,7 +409,13 @@ export async function listApiKeys(t: TenantRef): Promise<Array<ApiKeyDoc & { id:
 }
 
 export async function revokeApiKey(t: TenantRef, id: string): Promise<void> {
+  // Fetch the hash before setting revokedAt so we can drop the hash index.
+  // The authenticate path also checks revokedAt on the main doc, so missing
+  // this delete is degradation (slower rejection) not a security hole.
+  const snap = await apiKeysCol(t).doc(id).get();
+  const hash = snap.exists ? (snap.data() as ApiKeyDoc).hash : null;
   await apiKeysCol(t).doc(id).set({ revokedAt: new Date().toISOString() }, { merge: true });
+  if (hash) await deleteKeyHashIndex(hash);
 }
 
 export async function updateApiKeyFilters(
