@@ -13,7 +13,7 @@ import { getMarketsCache } from '@/lib/bt/markets-cache';
 import { getPortfolioKey } from '@/lib/bt/portfolio-key';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
-import { assertAllowed, filterBtHoldings, filterRecords, readRecordFields } from '@/lib/filters';
+import { assertAllowed, filterBtHoldings, filterPaginatedPayload, readRecordFields } from '@/lib/filters';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -53,23 +53,13 @@ export const GET = withRoute(async (req) => {
     });
   }
 
-  // BT's holdings response can come in a few shapes. Handle:
-  //   - the real shape: { Total: { Positions: [...], CurrencyRates: [...] } }
-  //     (Numerar-cash-with-inner-MoneyBalances-currency, plus stock positions)
-  //   - bare array
-  //   - { items: [...] }
-  // filterBtHoldings handles the first case (and is a no-op on the others).
-  // The markets cache lets readRecordFields canonicalize "REGS" → "BVB" etc.
+  // filterBtHoldings handles the real { Total, Positions } shape. For the
+  // fallback shapes (bare array, { items }, PaginatedResult<T>) we run the
+  // generic paginated walker. The markets cache lets readRecordFields
+  // canonicalize "REGS" → "BVB" etc.
   const read = (r: unknown) => readRecordFields(r, { marketsCache });
   holdings = filterBtHoldings(holdings, caller.filters, marketsCache);
-  if (Array.isArray(holdings)) {
-    holdings = filterRecords(holdings as unknown[], caller.filters, read);
-  } else if (holdings && typeof holdings === 'object') {
-    const obj = holdings as Record<string, unknown>;
-    if (Array.isArray(obj.items)) {
-      obj.items = filterRecords(obj.items as unknown[], caller.filters, read);
-    }
-  }
+  holdings = filterPaginatedPayload(holdings, caller.filters, read);
 
   return ok({ mode: caller.mode, portfolioKey, holdings });
 });

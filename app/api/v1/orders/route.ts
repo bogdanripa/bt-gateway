@@ -34,7 +34,7 @@ import { getPortfolioKey } from '@/lib/bt/portfolio-key';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
 import { audit } from '@/lib/events';
-import { assertAllowed, filterRecords, readRecordFields } from '@/lib/filters';
+import { assertAllowed, filterPaginatedPayload, readRecordFields } from '@/lib/filters';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -176,26 +176,11 @@ export const GET = withRoute(async (req) => {
       },
     );
 
+    // bt-trade's Orders/Search returns PaginatedResult<Order> =
+    // { Items: Order[], Page, PageSize, TotalItemCount }. filterPaginatedPayload
+    // walks the Items array, filters it, and syncs TotalItemCount.
     const read = (r: unknown) => readRecordFields(r, { marketsCache });
-    let orders: unknown = rawOrders;
-    if (Array.isArray(orders)) {
-      orders = filterRecords(orders as unknown[], caller.filters, read);
-    } else if (orders && typeof orders === 'object') {
-      const obj = orders as Record<string, unknown>;
-      // bt-trade's Orders/Search returns PaginatedResult<Order> =
-      // { Items: Order[], Page, PageSize, TotalItemCount }. Cover both the
-      // PascalCase (real) and lowercase (legacy / defensive) item keys, and
-      // keep TotalItemCount in sync with the filtered length.
-      const itemsKey = Array.isArray(obj.Items) ? 'Items'
-        : Array.isArray(obj.items) ? 'items'
-        : null;
-      if (itemsKey) {
-        const filtered = filterRecords(obj[itemsKey] as unknown[], caller.filters, read);
-        obj[itemsKey] = filtered;
-        if (typeof obj.TotalItemCount === 'number') obj.TotalItemCount = filtered.length;
-        else if (typeof obj.totalItemCount === 'number') obj.totalItemCount = filtered.length;
-      }
-    }
+    const orders = filterPaginatedPayload(rawOrders, caller.filters, read);
     return ok({ mode: caller.mode, orders });
   } catch (e) {
     if (e instanceof ApiError) throw e;

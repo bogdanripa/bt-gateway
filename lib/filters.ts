@@ -162,6 +162,39 @@ export function filterRecords<T>(
 }
 
 /**
+ * Filter a response payload that might be a bare array, a `{ items: [...] }`
+ * wrapper, or a bt-trade `PaginatedResult<T>` (`{ Items: T[], Page, PageSize,
+ * TotalItemCount }`). Mutates the wrapper in place when applicable so the
+ * caller keeps the original envelope; returns the payload (possibly a new
+ * array if the input was a bare array).
+ *
+ * Keeps TotalItemCount in sync with the filtered length so clients don't
+ * see a stale count.
+ */
+export function filterPaginatedPayload<R extends { market?: string | null; currency?: string | null; symbol?: string | null }>(
+  payload: unknown,
+  filters: ApiKeyFilters | undefined,
+  pick: (r: unknown) => R,
+): unknown {
+  if (Array.isArray(payload)) {
+    return filterRecords(payload as unknown[], filters, pick);
+  }
+  if (payload && typeof payload === 'object') {
+    const obj = payload as Record<string, unknown>;
+    const itemsKey = Array.isArray(obj.Items) ? 'Items'
+      : Array.isArray(obj.items) ? 'items'
+      : null;
+    if (itemsKey) {
+      const filtered = filterRecords(obj[itemsKey] as unknown[], filters, pick);
+      obj[itemsKey] = filtered;
+      if (typeof obj.TotalItemCount === 'number') obj.TotalItemCount = filtered.length;
+      else if (typeof obj.totalItemCount === 'number') obj.totalItemCount = filtered.length;
+    }
+  }
+  return payload;
+}
+
+/**
  * BT payloads are `unknown` — this helper reads common field names off a
  * record of unknown shape without throwing. BT uses PascalCase on most
  * endpoints (Currency, Market, Code) and occasionally nests the identifying
