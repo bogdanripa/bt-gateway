@@ -8,7 +8,7 @@
 
 import { requireApiKey } from '@/lib/auth/api-key';
 import { getMarketSnapshot, saveMarketSnapshot } from '@/lib/firestore';
-import { ok, withRoute } from '@/lib/route-handler';
+import { ok, readJsonObject, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
 
 export const runtime = 'nodejs';
@@ -30,12 +30,7 @@ export const PUT = withRoute<{ date: string }>(async (req, { params }) => {
   if (!DATE_RE.test(params.date)) {
     throw new ApiError('BAD_REQUEST', 'date must be YYYY-MM-DD');
   }
-  let body: unknown;
-  try { body = await req.json(); }
-  catch { throw new ApiError('BAD_REQUEST', 'Body must be JSON'); }
-  if (!body || typeof body !== 'object' || Array.isArray(body)) {
-    throw new ApiError('BAD_REQUEST', 'Body must be a JSON object');
-  }
+  const body = await readJsonObject(req);
   await saveMarketSnapshot(caller.tenant, caller.mode, params.date, body);
   return ok({ mode: caller.mode, date: params.date, saved: true });
 });

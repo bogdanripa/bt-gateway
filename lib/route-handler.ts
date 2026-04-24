@@ -77,3 +77,23 @@ export function withRoute<P = unknown>(fn: RouteFn<P>) {
 export function ok(data: unknown, init: ResponseInit = {}): NextResponse {
   return NextResponse.json(data, init);
 }
+
+/**
+ * Parse a request body as a JSON object (not array, not primitive). Throws
+ * BAD_REQUEST on invalid JSON, non-object top-level, or array top-level.
+ *
+ * Most mutating routes want the same guard; use this instead of re-rolling
+ * the `try/catch` + `typeof === 'object'` + `Array.isArray` check.
+ */
+export async function readJsonObject(req: Request): Promise<Record<string, unknown>> {
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    throw new ApiError('BAD_REQUEST', 'Body must be JSON');
+  }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw new ApiError('BAD_REQUEST', 'Body must be a JSON object');
+  }
+  return body as Record<string, unknown>;
+}

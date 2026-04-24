@@ -11,8 +11,7 @@
 
 import { requireApiKey } from '@/lib/auth/api-key';
 import { getPortfolioState, setPortfolioState } from '@/lib/firestore';
-import { ok, withRoute } from '@/lib/route-handler';
-import { ApiError } from '@/lib/errors';
+import { ok, readJsonObject, withRoute } from '@/lib/route-handler';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -25,12 +24,7 @@ export const GET = withRoute(async (req) => {
 
 export const PUT = withRoute(async (req) => {
   const caller = await requireApiKey(req);
-  let body: unknown;
-  try { body = await req.json(); }
-  catch { throw new ApiError('BAD_REQUEST', 'Body must be JSON'); }
-  if (!body || typeof body !== 'object' || Array.isArray(body)) {
-    throw new ApiError('BAD_REQUEST', 'Body must be a JSON object');
-  }
-  await setPortfolioState(caller.tenant, caller.mode, body as Record<string, unknown>);
+  const body = await readJsonObject(req);
+  await setPortfolioState(caller.tenant, caller.mode, body);
   return ok({ mode: caller.mode, saved: true });
 });
