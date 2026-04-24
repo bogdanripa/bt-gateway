@@ -24,6 +24,8 @@ import { ApiError } from '@/lib/errors';
 import { audit } from '@/lib/events';
 import { ok, withRoute } from '@/lib/route-handler';
 import { evictBtClient } from '@/lib/bt/client-pool';
+import { evictEvaluationCurrency } from '@/lib/bt/currency';
+import { evictMarkets } from '@/lib/bt/markets-cache';
 import { evictPortfolioKey } from '@/lib/bt/portfolio-key';
 import { defaultNtfyTopic } from '@bogdanripa/bt-trade';
 
@@ -86,11 +88,15 @@ export const PUT = withRoute<{ mode: string }>(async (req, { params, requestId }
     updatedAt: new Date().toISOString(),
   });
 
-  // Credentials changed → drop any persisted session + in-memory client.
-  // The next /api/v1 call for this tenant+mode will login() fresh.
+  // Credentials changed → drop any persisted session, in-memory client, and
+  // every BT-session-scoped cache (portfolio key, evaluation currency id,
+  // markets list). All of them are keyed to a specific session snapshot, so
+  // a fresh login under different creds must not reuse them.
   await deleteBtSession(caller.tenant, mode).catch(() => { /* best-effort */ });
   evictBtClient(caller.tenant, mode);
   evictPortfolioKey(caller.tenant, mode);
+  evictEvaluationCurrency(caller.tenant, mode);
+  evictMarkets(caller.tenant, mode);
 
   await audit({
     tenant: caller.tenant,
@@ -117,6 +123,8 @@ export const DELETE = withRoute<{ mode: string }>(async (req, { params, requestI
   await deleteBtSession(caller.tenant, mode).catch(() => { /* best-effort */ });
   evictBtClient(caller.tenant, mode);
   evictPortfolioKey(caller.tenant, mode);
+  evictEvaluationCurrency(caller.tenant, mode);
+  evictMarkets(caller.tenant, mode);
 
   await audit({
     tenant: caller.tenant,
