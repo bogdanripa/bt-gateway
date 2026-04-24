@@ -309,8 +309,9 @@ export function readRecordFields(
 }
 
 /**
- * Shape-aware filter for BT's holdings payload. Per the bt-trade package's
- * types, POST /Portfolio/Select returns:
+ * Shape-aware filter for the response BT returns from POST /Portfolio/Select
+ * (the endpoint wrapped by `client.portfolio.getHoldings`). Per bt-trade's
+ * typedefs the payload is:
  *
  *   {
  *     Positions: {                            // PaginatedResult<PositionItem>
@@ -338,7 +339,7 @@ export function readRecordFields(
  * Mutates the input in place — callers pass the just-received BT response so
  * there's no shared state to worry about.
  */
-export function filterBtHoldings(
+export function filterPortfolioSelectResponse(
   payload: unknown,
   filters: ApiKeyFilters | undefined,
   marketsCache?: Map<number, string>,

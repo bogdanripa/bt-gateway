@@ -13,7 +13,7 @@ import { getMarketsCache } from '@/lib/bt/markets-cache';
 import { getPortfolioKey } from '@/lib/bt/portfolio-key';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
-import { assertAllowed, filterBtHoldings, filterPaginatedPayload, readRecordFields } from '@/lib/filters';
+import { assertAllowed, filterPortfolioSelectResponse, filterPaginatedPayload, readRecordFields } from '@/lib/filters';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -53,12 +53,12 @@ export const GET = withRoute(async (req) => {
     });
   }
 
-  // filterBtHoldings handles the real { Total, Positions } shape. For the
-  // fallback shapes (bare array, { items }, PaginatedResult<T>) we run the
-  // generic paginated walker. The markets cache lets readRecordFields
+  // filterPortfolioSelectResponse handles the real { Total, Positions } shape.
+  // For the fallback shapes (bare array, { items }, PaginatedResult<T>) we
+  // run the generic paginated walker. The markets cache lets readRecordFields
   // canonicalize "REGS" → "BVB" etc.
   const read = (r: unknown) => readRecordFields(r, { marketsCache });
-  holdings = filterBtHoldings(holdings, caller.filters, marketsCache);
+  holdings = filterPortfolioSelectResponse(holdings, caller.filters, marketsCache);
   holdings = filterPaginatedPayload(holdings, caller.filters, read);
 
   return ok({ mode: caller.mode, portfolioKey, holdings });
