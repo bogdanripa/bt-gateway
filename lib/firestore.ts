@@ -274,9 +274,17 @@ export async function getUser(t: TenantRef): Promise<UserDoc | null> {
   return snap.exists ? (snap.data() as UserDoc) : null;
 }
 
+/**
+ * Upsert a user doc on sign-in. The `isAdmin` field on `UserDoc` mirrors
+ * the Firebase custom claim and is NEVER accepted from a caller-supplied
+ * patch — custom claims are authoritative and the only legitimate way to
+ * promote a user is out-of-band via `gcloud` (or a trusted admin API
+ * writing the claim). This helper reads `isAdmin` directly from the
+ * authenticated caller's claim, not from `patch`.
+ */
 export async function upsertUser(
   t: TenantRef,
-  patch: Partial<UserDoc> & { email: string },
+  patch: { email: string; displayName?: string; isAdmin: boolean },
 ): Promise<void> {
   const now = new Date().toISOString();
   const existing = await userDoc(t).get();
@@ -284,14 +292,24 @@ export async function upsertUser(
     const newDoc: UserDoc = {
       email: patch.email,
       displayName: patch.displayName,
-      isAdmin: patch.isAdmin ?? false,
+      isAdmin: patch.isAdmin,
       createdAt: now,
       updatedAt: now,
     };
     await userDoc(t).set(newDoc);
     return;
   }
-  await userDoc(t).set({ ...patch, updatedAt: now }, { merge: true });
+  // Merge email/displayName/isAdmin (all of which come from verified Firebase
+  // claims at the only call site) plus the bump of updatedAt.
+  await userDoc(t).set(
+    {
+      email: patch.email,
+      displayName: patch.displayName,
+      isAdmin: patch.isAdmin,
+      updatedAt: now,
+    },
+    { merge: true },
+  );
 }
 
 export async function getBtCreds(t: TenantRef, mode: BtMode): Promise<BtCredsDoc | null> {
