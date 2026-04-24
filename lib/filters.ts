@@ -226,21 +226,25 @@ export function filterPaginatedPayload<R extends { market?: string | null; curre
 }
 
 /**
- * BT payloads are `unknown` — this helper reads common field names off a
- * record of unknown shape without throwing. BT uses PascalCase on most
- * endpoints (Currency, Market, Code) and occasionally nests the identifying
- * fields under a sub-object (`.Value.Currency` on MoneyBalance entries,
- * sometimes `.Security.Symbol` / `.Instrument.Code` on position entries).
- * We probe both the flat case and common nesting containers so the filter
- * logic stays endpoint-agnostic.
+ * BT payloads are `unknown` — this helper reads the canonical field names
+ * off a record of unknown shape without throwing. BT uses PascalCase on
+ * position/order records (Currency, Market, Code) and lowercase on cash
+ * balance entries where currency is nested inside `.value: MoneyValue`.
+ *
+ * Field lists below cover what's observed in bt-trade 0.3.1's typedefs:
+ *   - PositionItem: Code, Market, Currency, MarketId
+ *   - PositionSummary: Ticker
+ *   - Order: Code, Symbol, Market, MarketId/ExchangeId
+ *   - BalanceEntry: value.currency (and its PascalCase cousins)
+ *   - searchInstrument hit: code, market, currency, marketId (lowercase)
  */
-// Symbol field candidates. Covers PositionItem.Code (live per-security rows)
-// and PositionSummary.Ticker (aggregate rows) from bt-trade's typedefs, plus
-// the usual fallbacks for other endpoints.
-const SYMBOL_KEYS = ['symbol', 'Symbol', 'code', 'Code', 'ticker', 'Ticker', 'instrument', 'Instrument', 'securitySymbol', 'SecuritySymbol', 'stockSymbol', 'StockSymbol', 'isin', 'Isin', 'ISIN'];
-const MARKET_KEYS = ['market', 'Market', 'marketCode', 'MarketCode', 'exchange', 'Exchange'];
-const CURRENCY_KEYS = ['currency', 'Currency', 'currencyId', 'CurrencyId', 'currencyCode', 'CurrencyCode', 'ccy', 'Ccy'];
-const NESTED_CONTAINERS = ['value', 'Value', 'security', 'Security', 'instrument', 'Instrument', 'securityInfo', 'SecurityInfo'];
+const SYMBOL_KEYS = ['symbol', 'Symbol', 'code', 'Code', 'ticker', 'Ticker'];
+const MARKET_KEYS = ['market', 'Market'];
+const CURRENCY_KEYS = ['currency', 'Currency'];
+// Only container we've ever seen nest a currency: BalanceEntry.value (a
+// MoneyValue with .currency). Keep lowercase+PascalCase to cover both
+// shapes observed.
+const NESTED_CURRENCY_CONTAINERS = ['value', 'Value'];
 
 const MARKET_ID_KEYS = ['MarketId', 'marketId', 'ExchangeId', 'exchangeId'];
 
@@ -269,13 +273,14 @@ export function readRecordFields(
     }
     return undefined;
   };
-  const pickAny = (keys: string[]): string | undefined => {
-    const top = pickStr(o, keys);
-    if (top) return top;
-    for (const k of NESTED_CONTAINERS) {
+
+  // Currency may be nested inside `.value` on BalanceEntry records; otherwise
+  // every field we care about is at the top level.
+  const nestedCurrency = (): string | undefined => {
+    for (const k of NESTED_CURRENCY_CONTAINERS) {
       const parent = o[k];
       if (parent && typeof parent === 'object') {
-        const v = pickStr(parent as Record<string, unknown>, keys);
+        const v = pickStr(parent as Record<string, unknown>, CURRENCY_KEYS);
         if (v) return v;
       }
     }
@@ -287,7 +292,7 @@ export function readRecordFields(
   // segment-level code on `Market` (e.g. "REGS" for the BVB regulated-market
   // segment) while the user-configured filter is the parent exchange code
   // ("BVB"). MarketId is stable across segments.
-  let market = pickAny(MARKET_KEYS);
+  let market = pickStr(o, MARKET_KEYS);
   if (opts?.marketsCache) {
     const mid = pickNumber(o, MARKET_ID_KEYS);
     if (mid !== undefined) {
@@ -298,8 +303,8 @@ export function readRecordFields(
 
   return {
     market,
-    currency: pickAny(CURRENCY_KEYS),
-    symbol: pickAny(SYMBOL_KEYS),
+    currency: pickStr(o, CURRENCY_KEYS) ?? nestedCurrency(),
+    symbol: pickStr(o, SYMBOL_KEYS),
   };
 }
 
