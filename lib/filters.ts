@@ -64,6 +64,23 @@ function hasConstraints(a: FilterAxis): boolean {
  * CONTAIN the filter value (case-insensitive). Markets and stocks stay on
  * exact-equality matching because those codes are well-defined.
  */
+/**
+ * How each axis compares a record's value to a filter list entry:
+ * - `currencies`: the record's currency string must CONTAIN the filter value
+ *   (case-insensitive). Lets "RON" match "RON", "lei (RON)", "Romanian Leu
+ *   RON" across BT's varying payload shapes.
+ * - `markets`, `stocks`: exact-equality (case-insensitive). Short codes like
+ *   "BVB" and tickers like "TLV" are well-defined; substring would leak
+ *   e.g. "TEL" into "TELA" matches.
+ *
+ * Returns a predicate that takes a normalized filter-list entry and reports
+ * whether the already-normalized record value matches it.
+ */
+function matcherFor(axis: FilterAxisName, recordValue: string): (filterVal: string) => boolean {
+  if (axis === 'currencies') return (filterVal) => recordValue.includes(filterVal);
+  return (filterVal) => filterVal === recordValue;
+}
+
 export function isAllowedOn(
   filters: ApiKeyFilters | undefined,
   axis: FilterAxisName,
@@ -76,9 +93,7 @@ export function isAllowedOn(
     // No field to match on → only reject if there's an include list (strict).
     return a.include.length === 0;
   }
-  const match = axis === 'currencies'
-    ? (filterVal: string) => v.includes(filterVal)
-    : (filterVal: string) => filterVal === v;
+  const match = matcherFor(axis, v);
 
   for (const x of a.exclude) {
     const n = norm(x);
@@ -159,6 +174,22 @@ export function filterRecords<T>(
     if (hasConstraints(s) && !isAllowedOn(filters, 'stocks', fields.symbol)) return false;
     return true;
   });
+}
+
+/**
+ * Filter a list using ONLY the currencies axis, ignoring markets/stocks.
+ *
+ * Use on resources that have no market/stock concept (cash balances,
+ * Total.MoneyBalances roll-ups, Total.CurrencyRates). Going through
+ * `filterRecords` would incorrectly drop every row when another axis has
+ * an include list (undefined market + markets.include=[BVB] → strict reject).
+ */
+export function filterByCurrencyOnly<T>(
+  records: readonly T[],
+  filters: ApiKeyFilters | undefined,
+  pickCurrency: (r: T) => string | null | undefined,
+): T[] {
+  return records.filter((r) => isAllowedOn(filters, 'currencies', pickCurrency(r)));
 }
 
 /**
@@ -346,29 +377,33 @@ export function filterBtHoldings(
       }
 
       // Top-level Total.MoneyBalances (NOT the ones nested inside the Numerar
-      // summary row — those are handled in filterPosition). These are the
-      // roll-up rows that show e.g. "Total cash" split per currency.
-      // Currency-only records: applying filterRecords would strictly reject
-      // every row when markets/stocks have include lists (undefined fields).
+      // summary row — those are handled in filterPosition). Roll-up rows that
+      // show e.g. "Total cash" split per currency — currency-only.
       const tmbKey = 'MoneyBalances' in t ? 'MoneyBalances' : 'moneyBalances' in t ? 'moneyBalances' : null;
       if (tmbKey && Array.isArray(t[tmbKey])) {
-        t[tmbKey] = (t[tmbKey] as unknown[]).filter((b) => {
-          const fields = readRecordFields(b);
-          return isAllowedOn(filters, 'currencies', fields.currency ?? null);
-        });
+        t[tmbKey] = filterByCurrencyOnly(
+          t[tmbKey] as unknown[],
+          filters,
+          (b) => readRecordFields(b).currency ?? null,
+        );
       }
 
-      // CurrencyRates is also a currency-only resource — same reasoning.
+      // CurrencyRates is also a currency-only resource — the currency lives
+      // on `.Name`, not on the Currency/CurrencyId fields readRecordFields
+      // probes, so pick it out explicitly.
       const ratesKey = 'CurrencyRates' in t ? 'CurrencyRates' : 'currencyRates' in t ? 'currencyRates' : null;
       if (ratesKey && Array.isArray(t[ratesKey])) {
-        t[ratesKey] = (t[ratesKey] as unknown[]).filter((r) => {
-          if (!r || typeof r !== 'object') return true;
-          const o = r as Record<string, unknown>;
-          const name = typeof o.Name === 'string' ? o.Name
-            : typeof o.name === 'string' ? o.name
-            : undefined;
-          return isAllowedOn(filters, 'currencies', name ?? null);
-        });
+        t[ratesKey] = filterByCurrencyOnly(
+          t[ratesKey] as unknown[],
+          filters,
+          (r) => {
+            if (!r || typeof r !== 'object') return null;
+            const o = r as Record<string, unknown>;
+            return typeof o.Name === 'string' ? o.Name
+              : typeof o.name === 'string' ? o.name
+              : null;
+          },
+        );
       }
     }
   }
@@ -390,10 +425,11 @@ function filterPosition(
   if (isCash) {
     const balKey = 'MoneyBalances' in p ? 'MoneyBalances' : 'moneyBalances' in p ? 'moneyBalances' : null;
     if (balKey && Array.isArray(p[balKey])) {
-      const kept = (p[balKey] as unknown[]).filter((b) => {
-        const fields = readRecordFields(b);
-        return isAllowedOn(filters, 'currencies', fields.currency ?? null);
-      });
+      const kept = filterByCurrencyOnly(
+        p[balKey] as unknown[],
+        filters,
+        (b) => readRecordFields(b).currency ?? null,
+      );
       if (kept.length === 0) return null;
       p[balKey] = kept;
     }
