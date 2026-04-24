@@ -108,10 +108,8 @@ export async function refreshTenantMode(
     return { uid: t.uid, mode, status: 'err', message: `restore failed: ${(e as Error).message}` };
   }
 
-  const auth = (client as unknown as { auth: { refresh(): Promise<void> } }).auth;
-
   try {
-    await auth.refresh();
+    await client.auth.refresh();
   } catch (e) {
     const msg = (e as Error).message || 'refresh failed';
     await audit({

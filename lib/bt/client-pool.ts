@@ -345,11 +345,7 @@ export async function runWithSessionMutating<T>(
  * (not `#`-private in bt-trade 0.3.1).
  */
 export function disableAutoRefresh(client: BTTradeClient): void {
-  type AuthShape = {
-    _refreshTimer: ReturnType<typeof setTimeout> | null;
-    refresh(): Promise<void>;
-  };
-  const auth = (client as unknown as { auth: AuthShape }).auth;
+  const auth = client.auth;
 
   const clearTimer = () => {
     if (auth._refreshTimer) {

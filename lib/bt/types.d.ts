@@ -60,7 +60,6 @@ declare module '@bogdanripa/bt-trade' {
   export interface AccountsApi {
     list(): Promise<Account[]>;
     defaultCurrencyId(account: Account): string | number | null;
-    getAvailableTypes(portfolioKey: string): Promise<unknown>;
   }
 
   export interface BtProfile {
@@ -81,22 +80,31 @@ declare module '@bogdanripa/bt-trade' {
   export interface ReferenceApi {
     listCurrencies(): Promise<unknown>;
     listEvaluationCurrencies(): Promise<unknown>;
-    listAccountTypes(): Promise<unknown>;
-    listOrderStatuses(): Promise<unknown>;
-    listTradeTypes(): Promise<unknown>;
   }
 
   export interface PortfolioApi {
     getCash(args: { portfolioKey: string; currencyId?: string | number }): Promise<unknown>;
-    getCashDetails(args: { portfolioKey: string; currencyId?: string | number }): Promise<unknown>;
-    getCashAccounts(args: { portfolioKey: string }): Promise<unknown>;
-    getBankAccounts(args: { portfolioKey: string }): Promise<unknown>;
     getHoldings(args: {
       portfolioKey: string;
       market?: string;
       endDate?: string;
       queryModel?: Record<string, unknown>;
     }): Promise<unknown>;
+  }
+
+  /**
+   * Internal auth session surface. Not documented in the package README, but
+   * we reach for it in two places:
+   *   - POST /api/v1/session/refresh explicitly calls `auth.refresh()`.
+   *   - lib/bt/client-pool.ts#disableAutoRefresh clears `_refreshTimer` and
+   *     wraps `refresh()` to neutralize bt-trade's setTimeout-driven token
+   *     refresh. The single-underscore name is package convention for
+   *     "public but not documented"; we rely on it here so future upgrades
+   *     that rename it will fail to typecheck.
+   */
+  export interface AuthSession {
+    refresh(): Promise<void>;
+    _refreshTimer: ReturnType<typeof setTimeout> | null;
   }
 
   export type OrderSide = 'buy' | 'sell';
@@ -147,6 +155,7 @@ declare module '@bogdanripa/bt-trade' {
     readonly accounts: AccountsApi;
     readonly portfolio: PortfolioApi;
     readonly orders: OrdersApi;
+    readonly auth: AuthSession;
     login(args: { username: string; password: string }): Promise<SessionSnapshot>;
     restore(snapshot: SessionSnapshot): void;
     toSnapshot(): SessionSnapshot | null;

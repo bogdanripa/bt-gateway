@@ -26,13 +26,8 @@ export const POST = withRoute(async (req, { requestId }) => {
   const caller = await requireApiKey(req);
   const client = await getBtClient(caller.tenant, caller.mode);
 
-  // `client.auth` isn't in our .d.ts (we kept the public surface minimal) —
-  // cast through unknown to reach refresh(). The auth object is the same one
-  // the transport uses for 401 retry, so behavior is consistent.
-  const auth = (client as unknown as { auth: { refresh(): Promise<void> } }).auth;
-
   try {
-    await auth.refresh();
+    await client.auth.refresh();
   } catch (e) {
     const msg = (e as Error).message || 'refresh failed';
     await audit({
