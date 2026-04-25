@@ -29,23 +29,13 @@ import {
 import { decrypt } from '../kms';
 import { audit } from '../events';
 import { notifyTenant } from '../telegram';
-import { disableAutoRefresh, evictBtClient } from './client-pool';
+import { evictBtClient, instrumentRefresh } from './client-pool';
 
 interface RefreshOne {
   uid: string;
   mode: BtMode;
   status: 'skipped' | 'ok' | 'err';
   message?: string;
-}
-
-/**
- * Last 8 chars of a refresh_token — enough to correlate "RT issued at T1"
- * with "RT sent at T2" across log lines without leaking the full token.
- * Returns null for missing/short values.
- */
-function rtTail(rt: string | null | undefined): string | null {
-  if (typeof rt !== 'string' || rt.length < 8) return null;
-  return rt.slice(-8);
 }
 
 export async function refreshTenantMode(
@@ -57,7 +47,6 @@ export async function refreshTenantMode(
   if (!session?.snapshot) {
     return { uid: t.uid, mode, status: 'skipped', message: 'no session' };
   }
-  const beforeSnap = session.snapshot as SessionSnapshot;
 
   // Build a throwaway client just for the refresh. No OTP provider is ever
   // invoked (refresh() doesn't prompt) but we pass a no-op one so the client
@@ -107,11 +96,11 @@ export async function refreshTenantMode(
     },
   });
 
-  // Kill bt-trade's internal auto-refresh timer on this throwaway. Without
-  // this, the timer keeps the client alive past this cron tick and later
-  // fires with the now-stale refresh_token it had in memory, racing other
-  // refresh paths and producing 'invalid_grant' zombies.
-  disableAutoRefresh(client);
+  // Wrap auth.refresh: kill bt-trade's setTimeout-driven refresh (zombie-RT
+  // race surface) AND emit always-on summary breadcrumbs (RT tail, expiries,
+  // rotation status) so we can correlate this attempt with prior successes.
+  // source:'cron' marks these as cron-driven for filtering.
+  instrumentRefresh(client, { uid: t.uid, mode, source: 'cron' });
 
   try {
     client.restore(session.snapshot as SessionSnapshot);
@@ -119,35 +108,12 @@ export async function refreshTenantMode(
     return { uid: t.uid, mode, status: 'err', message: `restore failed: ${(e as Error).message}` };
   }
 
-  // Always-on breadcrumb: which RT tail we're about to send + when it was
-  // due to expire per the snapshot. Lets us cross-reference a future failure
-  // ("which RT issued where got rejected here?") without needing
-  // BT_REFRESH_DEBUG=1 to capture full plaintext.
-  console.log(JSON.stringify({
-    severity: 'INFO',
-    msg: 'bt.refresh.summary.attempt',
-    uid: t.uid,
-    mode,
-    requestId,
-    rtSentTail: rtTail(beforeSnap.refreshToken),
-    rtSentExpiresAt: beforeSnap.refreshTokenExpires,
-    sessionUpdatedAt: session.updatedAt,
-  }));
-
+  // The instrumented auth.refresh emits bt.refresh.summary.attempt /
+  // .result lines around the call. We only audit + handle eviction here.
   try {
     await client.auth.refresh();
   } catch (e) {
     const msg = (e as Error).message || 'refresh failed';
-    console.warn(JSON.stringify({
-      severity: 'WARNING',
-      msg: 'bt.refresh.summary.result',
-      uid: t.uid,
-      mode,
-      requestId,
-      status: 'err',
-      rtSentTail: rtTail(beforeSnap.refreshToken),
-      errMessage: msg,
-    }));
     await audit({
       tenant: t,
       type: 'refresh.failure',
@@ -167,23 +133,6 @@ export async function refreshTenantMode(
     );
     return { uid: t.uid, mode, status: 'err', message: msg };
   }
-
-  // On success, log what BT issued so subsequent attempts can be correlated.
-  // toSnapshot() reflects the rotated tokens onSessionChange just persisted.
-  const afterSnap = client.toSnapshot();
-  console.log(JSON.stringify({
-    severity: 'INFO',
-    msg: 'bt.refresh.summary.result',
-    uid: t.uid,
-    mode,
-    requestId,
-    status: 'ok',
-    rtSentTail: rtTail(beforeSnap.refreshToken),
-    rtReceivedTail: rtTail(afterSnap?.refreshToken),
-    rtRotated: !!afterSnap?.refreshToken && afterSnap.refreshToken !== beforeSnap.refreshToken,
-    rtReceivedExpiresAt: afterSnap?.refreshTokenExpires ?? null,
-    accessTokenExpiresAt: afterSnap?.expiresAt ? new Date(afterSnap.expiresAt).toISOString() : null,
-  }));
 
   await audit({
     tenant: t,

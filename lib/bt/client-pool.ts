@@ -36,7 +36,7 @@ import {
   defaultNtfyTopic,
   type SessionSnapshot,
 } from '@bogdanripa/bt-trade';
-import { disableAutoRefresh, isSessionExpired } from './session-internals';
+import { instrumentRefresh, isSessionExpired } from './session-internals';
 import { ApiError } from '../errors';
 import { decrypt } from '../kms';
 import { audit } from '../events';
@@ -146,11 +146,13 @@ async function buildClient(t: TenantRef, mode: BtMode): Promise<PoolEntry> {
     },
   });
 
-  // Kill bt-trade's internal auto-refresh timer before any login/restore
-  // runs. Our cron + transport 401-retry cover both token types; an
-  // internal third driver was racing both (see git history for the
-  // zombie-refresh invalid_grant cascade).
-  disableAutoRefresh(client);
+  // Wrap auth.refresh: kill bt-trade's internal setTimeout-driven refresh
+  // (the cron + transport 401-retry are sufficient, the third driver was
+  // racing both — see git history for the zombie-refresh invalid_grant
+  // cascade) AND emit always-on summary breadcrumbs so we can correlate
+  // RT issuance with subsequent attempts. source:'pool' marks these as
+  // user-traffic-driven (transport 401-retry, /api/v1/session/refresh).
+  instrumentRefresh(client, { uid: t.uid, mode, source: 'pool' });
 
   // Try to restore a persisted snapshot. If it works, we skip the full
   // login (and the OTP prompt). If the refresh token has already expired
@@ -254,9 +256,9 @@ export function evictBtClient(t: TenantRef, mode: BtMode): void {
 }
 
 // Re-export for callers that import from client-pool — `isSessionExpired`
-// and `disableAutoRefresh` live in ./session-internals, but keeping the
+// and `instrumentRefresh` live in ./session-internals, but keeping the
 // existing import surface means no call-site churn.
-export { disableAutoRefresh, isSessionExpired } from './session-internals';
+export { instrumentRefresh, isSessionExpired } from './session-internals';
 
 /**
  * Run `op` against this tenant's BT client, transparently retrying ONCE
