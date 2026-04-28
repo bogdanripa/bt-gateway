@@ -48,13 +48,19 @@ export interface RefreshContext {
  *      bt-trade schedules a setTimeout on every successful login/restore/
  *      refresh; we have our own cron + transport 401-retry to keep things
  *      fresh, so the third driver is just race surface (zombie clients
- *      firing with stale RTs).
+ *      firing with stale RTs after the cron has rotated them in Firestore).
+ *
+ *      The wrapper covers ALL three scheduling sites:
+ *        - login()  — wrapped here so its post-login schedule is killed.
+ *        - restore() — wrapped here so its post-restore schedule is killed.
+ *        - refresh() — wrapped here so its post-refresh schedule is killed,
+ *          AND the call surface is what emits the summary breadcrumbs.
+ *
  *   2. Emit always-on summary breadcrumbs (RT tail, expiries, rotation)
  *      for every refresh — pool-driven (user calls / explicit refresh
  *      route) AND cron-driven. Only the last 8 chars of any RT make it
  *      to logs, so no plaintext leakage.
  *
- * Single helper because both concerns hook the same `auth.refresh` wrapper.
  * `BT_REFRESH_DEBUG=1` continues to add the heavy `bt.refresh.request` /
  * `bt.refresh.response` lines (with full bodies) on the cron path only —
  * see lib/bt/refresh.ts.
@@ -70,6 +76,31 @@ export function instrumentRefresh(client: BTTradeClient, ctx: RefreshContext): v
   };
 
   clearTimer();
+
+  // Wrap login + restore so the timer scheduled by their internal
+  // #scheduleAutoRefresh() is cleared as soon as control returns to us.
+  // Without these, the very first timer set at login/restore time survives
+  // and fires ~60 minutes later — by which point the cron may have rotated
+  // the RT in Firestore, leaving the in-memory snapshot stale and the
+  // pool-driven refresh sending an already-consumed RT.
+  const originalLogin = client.login.bind(client);
+  client.login = async function (args) {
+    try {
+      return await originalLogin(args);
+    } finally {
+      clearTimer();
+    }
+  };
+
+  const originalRestore = client.restore.bind(client);
+  client.restore = function (snap) {
+    try {
+      return originalRestore(snap);
+    } finally {
+      clearTimer();
+    }
+  };
+
   const original = auth.refresh.bind(auth);
 
   auth.refresh = async function () {
