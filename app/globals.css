@@ -236,6 +236,30 @@ a.setup-card h3 { color: var(--fg); }
 a.setup-card .dim { color: var(--fg-dim); }
 a.setup-card code { background: var(--bg-elev-2); padding: 0.05rem 0.3rem; border-radius: 3px; }
 
+.mcp-url-card {
+  background: var(--bg-elev);
+  border: 1px solid rgba(110, 168, 254, 0.4);
+  border-radius: 8px;
+  padding: 1rem 1.25rem;
+  margin: 1.5rem 0 1.5rem;
+  max-width: 640px;
+}
+.mcp-url-card label {
+  font-size: 0.72rem;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.45rem;
+}
+.mcp-url-card .mono-block {
+  display: block;
+  font-size: 0.95rem;
+  padding: 0.6rem 0.75rem;
+  margin: 0 0 0.5rem;
+  background: var(--bg-elev-2);
+  user-select: all;
+}
+
 kbd, .mono-block {
   font-family: var(--mono);
   font-size: 0.82rem;

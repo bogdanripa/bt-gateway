@@ -79,14 +79,34 @@ export default function LandingPage() {
         <header>
           <h1>Bring your BT Trade account to Claude.</h1>
           <p className="lead">
-            BT Gateway lets you ask{' '}
+            BT Gateway is an{' '}
+            <strong>
+              <a
+                href="https://modelcontextprotocol.io"
+                target="_blank"
+                rel="noreferrer"
+              >
+                MCP
+              </a>{' '}
+              connector
+            </strong>{' '}
+            that lets you ask{' '}
             <a href="https://claude.ai" target="_blank" rel="noreferrer">Claude</a> (or
-            other AI assistants) about your Banca Transilvania trading account in plain
-            language. &ldquo;What&apos;s my cash balance?&rdquo; &ldquo;Show me my
-            positions.&rdquo; &ldquo;Place a buy order for 100 TVBETETF at market.&rdquo;
-            It works with your real account, or a free demo account if you&apos;d rather
-            try things out first.
+            any other MCP-compatible AI assistant) about your Banca Transilvania trading
+            account in plain language. &ldquo;What&apos;s my cash balance?&rdquo;
+            &ldquo;Show me my positions.&rdquo; &ldquo;Place a buy order for 100 TVBETETF
+            at market.&rdquo; Works with your real account, or a free demo account if
+            you&apos;d rather try things out first.
           </p>
+
+          <div className="mcp-url-card">
+            <label htmlFor="mcp-url">MCP connector URL</label>
+            <pre id="mcp-url" className="mono-block">https://bt-gateway.bogdanripa.com/mcp</pre>
+            <p className="dim" style={{ fontSize: '0.85rem', margin: 0 }}>
+              Paste this into Claude → <em>Settings → Connectors → Add custom connector</em>.
+              You&apos;ll be walked through signing in and choosing what Claude can do.
+            </p>
+          </div>
 
           <div className="cta-row">
             <a href="/setup/demo" className="button-link">

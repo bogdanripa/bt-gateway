@@ -23,7 +23,7 @@ export function MarketingShell({ children }: { children: ReactNode }) {
         <a href="/setup/demo">Demo setup</a>
         <a href="/docs">Docs</a>
         <span className="spacer" />
-        <a href="/console" className="button-link">Open dashboard →</a>
+        <a href="/console" className="button-link">Console →</a>
       </header>
       <main className="container marketing">{children}</main>
       <footer className="marketing-footer">
