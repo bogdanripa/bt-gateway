@@ -90,6 +90,11 @@ export interface AuthenticatedCaller {
   keyId: string;
   /** Per-key filters. Undefined for keys created before the feature shipped. */
   filters?: ApiKeyFilters;
+  /**
+   * Permission scope. Legacy keys with no `access` field default to `rw`.
+   * Mutating routes (e.g. POST /api/v1/orders) reject `read` callers.
+   */
+  access: 'read' | 'rw';
 }
 
 /**
@@ -119,6 +124,7 @@ export async function authenticateApiKey(raw: string): Promise<AuthenticatedCall
       mode: BtMode;
       revokedAt?: string;
       filters?: ApiKeyFilters;
+      access?: 'read' | 'rw';
     };
     if (data.mode !== mode) continue;
     if (data.revokedAt) continue;
@@ -142,7 +148,13 @@ export async function authenticateApiKey(raw: string): Promise<AuthenticatedCall
     // would add ~50ms to every authed call; we don't need it to block.
     void touchApiKey(tenant, kid).catch(() => { /* swallow */ });
 
-    return { tenant, mode, keyId: kid, filters: data.filters };
+    return {
+      tenant,
+      mode,
+      keyId: kid,
+      filters: data.filters,
+      access: data.access ?? 'rw',
+    };
   }
 
   throw new ApiError('UNAUTHORIZED', 'API key not recognized');
@@ -156,6 +168,16 @@ export async function requireApiKey(req: NextRequest): Promise<AuthenticatedCall
   const raw = extractApiKey(req);
   if (!raw) throw new ApiError('UNAUTHORIZED', 'Missing API key');
   return authenticateApiKey(raw);
+}
+
+/**
+ * Reject read-only callers from mutating routes. Call at the top of every
+ * POST/PUT/PATCH/DELETE handler after `requireApiKey`.
+ */
+export function assertWriteAccess(caller: AuthenticatedCaller): void {
+  if (caller.access !== 'rw') {
+    throw new ApiError('FORBIDDEN', 'This API key is read-only');
+  }
 }
 
 // Re-export for UI pages that need the shape.

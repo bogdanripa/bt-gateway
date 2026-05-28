@@ -7,7 +7,7 @@
  *   GET  /api/v1/considered?since=ISO&limit=N  — query
  */
 
-import { requireApiKey } from '@/lib/auth/api-key';
+import { requireApiKey, assertWriteAccess } from '@/lib/auth/api-key';
 import { appendConsideredRecord, listConsideredRecords } from '@/lib/firestore';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
@@ -18,6 +18,7 @@ export const dynamic = 'force-dynamic';
 
 export const POST = withRoute(async (req) => {
   const caller = await requireApiKey(req);
+  assertWriteAccess(caller);
   let body: unknown;
   try { body = await req.json(); }
   catch { throw new ApiError('BAD_REQUEST', 'Body must be JSON'); }

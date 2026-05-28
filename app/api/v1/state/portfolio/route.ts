@@ -9,7 +9,7 @@
  * /api/v1/holdings; this is a convenience read.
  */
 
-import { requireApiKey } from '@/lib/auth/api-key';
+import { requireApiKey, assertWriteAccess } from '@/lib/auth/api-key';
 import { getPortfolioState, setPortfolioState } from '@/lib/firestore';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
@@ -25,6 +25,7 @@ export const GET = withRoute(async (req) => {
 
 export const PUT = withRoute(async (req) => {
   const caller = await requireApiKey(req);
+  assertWriteAccess(caller);
   let body: unknown;
   try { body = await req.json(); }
   catch { throw new ApiError('BAD_REQUEST', 'Body must be JSON'); }

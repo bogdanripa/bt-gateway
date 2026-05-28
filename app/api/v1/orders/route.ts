@@ -26,7 +26,7 @@
  */
 
 import { z } from 'zod';
-import { requireApiKey } from '@/lib/auth/api-key';
+import { requireApiKey, assertWriteAccess } from '@/lib/auth/api-key';
 import { getBtClient } from '@/lib/bt/client-pool';
 import { getPortfolioKey } from '@/lib/bt/portfolio-key';
 import { ok, withRoute } from '@/lib/route-handler';
@@ -49,6 +49,7 @@ const PlaceSchema = z.object({
 
 export const POST = withRoute(async (req, { requestId }) => {
   const caller = await requireApiKey(req);
+  assertWriteAccess(caller);
   const body = await req.json().catch(() => null);
   const parsed = PlaceSchema.safeParse(body);
   if (!parsed.success) {

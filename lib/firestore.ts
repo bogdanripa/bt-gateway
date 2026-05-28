@@ -82,6 +82,60 @@ export interface ApiKeyDoc {
   revokedAt?: string;
   /** Per-axis include/exclude filters. Optional; older keys won't have it. */
   filters?: ApiKeyFilters;
+  /**
+   * Permission scope for this key. `read` blocks all mutating routes
+   * (currently: POST /api/v1/orders). Absent on legacy keys, which are
+   * treated as full read+write.
+   */
+  access?: 'read' | 'rw';
+  /**
+   * Set when this key was minted via the MCP OAuth flow. Used by the
+   * "one MCP connection at a time" rule: a new MCP grant revokes any
+   * prior key with `mcpClientId` set for the same tenant + mode.
+   */
+  mcpClientId?: string;
+  mcpCreatedAt?: string;
+}
+
+/**
+ * Dynamic Client Registration record (RFC 7591). Stored at the root in
+ * `oauth_clients/{clientId}` because clients are not tenant-scoped — any
+ * tenant can authenticate against a given registered client. The client is
+ * just a label + redirect_uri allowlist.
+ *
+ * We only support PUBLIC clients (no client_secret) using PKCE.
+ */
+export interface OauthClientDoc {
+  clientId: string;
+  clientName: string;
+  redirectUris: string[];
+  createdAt: string;
+}
+
+/**
+ * One-shot authorization code minted at consent time and redeemed at the
+ * token endpoint. Stored at `oauth_codes/{codeHash}` (sha256 of the raw
+ * code; the raw code is delivered to the user agent only).
+ *
+ * `filters` is cloned at consent time from whichever ApiKeyDoc the user
+ * chose, OR left undefined for "no filters". The resulting MCP-sourced
+ * API key inherits these filters at token-exchange.
+ */
+export interface OauthCodeDoc {
+  codeHash: string;
+  clientId: string;
+  redirectUri: string;
+  codeChallenge: string;
+  codeChallengeMethod: 'S256';
+  uid: string;
+  mode: BtMode;
+  access: 'read' | 'rw';
+  filters?: ApiKeyFilters;
+  /** Label of the source API key (for the resulting key's display name). */
+  sourceKeyLabel?: string;
+  createdAt: string;
+  expiresAt: string;
+  redeemedAt?: string;
 }
 
 /** Audit log entry — only mutating events land here. Reads do not. */
@@ -101,7 +155,9 @@ export interface EventDoc {
     | 'apikey.updated'
     | 'apikey.revoked'
     | 'telegram.linked'
-    | 'telegram.unlinked';
+    | 'telegram.unlinked'
+    | 'mcp.connected'
+    | 'mcp.revoked';
   /** Who caused the event — 'user' (UI), 'api_key:<kid>' (programmatic), 'cron', 'system'. */
   actor: string;
   mode?: BtMode;
@@ -607,6 +663,71 @@ export async function getMarketSnapshot(
 ): Promise<Record<string, unknown> | null> {
   const snap = await snapshotsCol(t, mode).doc(date).get();
   return snap.exists ? (snap.data() as Record<string, unknown>) : null;
+}
+
+// ---- OAuth (MCP) helpers ---------------------------------------------------
+//
+// These are root collections, not tenant-scoped, because client registration
+// happens before any user is authenticated. Tenant linkage lives on each
+// authorization code (OauthCodeDoc.uid) and on the resulting ApiKeyDoc.
+
+function oauthClientDocRef(clientId: string): DocumentReference {
+  return db().collection('oauth_clients').doc(clientId);
+}
+
+function oauthCodeDocRef(codeHash: string): DocumentReference {
+  return db().collection('oauth_codes').doc(codeHash);
+}
+
+export async function createOauthClient(doc: OauthClientDoc): Promise<void> {
+  await oauthClientDocRef(doc.clientId).set(doc);
+}
+
+export async function getOauthClient(clientId: string): Promise<OauthClientDoc | null> {
+  const snap = await oauthClientDocRef(clientId).get();
+  return snap.exists ? (snap.data() as OauthClientDoc) : null;
+}
+
+export async function createOauthCode(doc: OauthCodeDoc): Promise<void> {
+  await oauthCodeDocRef(doc.codeHash).set(doc);
+}
+
+export async function consumeOauthCode(codeHash: string): Promise<OauthCodeDoc | null> {
+  // One-shot: a transaction reads the doc and, if unredeemed and unexpired,
+  // marks it redeemed before returning. Concurrent redemption attempts get
+  // null on the second call.
+  return db().runTransaction(async (tx) => {
+    const ref = oauthCodeDocRef(codeHash);
+    const snap = await tx.get(ref);
+    if (!snap.exists) return null;
+    const data = snap.data() as OauthCodeDoc;
+    if (data.redeemedAt) return null;
+    if (Date.now() > new Date(data.expiresAt).getTime()) return null;
+    const now = new Date().toISOString();
+    tx.update(ref, { redeemedAt: now });
+    return { ...data, redeemedAt: now };
+  });
+}
+
+/**
+ * Find any active (non-revoked) MCP-sourced API key for this tenant + mode.
+ * Used by the token endpoint to revoke a prior connection before issuing a
+ * new one ("one MCP connection at a time" rule, per mode).
+ */
+export async function findActiveMcpKey(
+  t: TenantRef,
+  mode: BtMode,
+): Promise<(ApiKeyDoc & { id: string }) | null> {
+  // In-memory filter avoids needing a composite index on (mode, mcpClientId);
+  // key counts per tenant are small.
+  const snap = await apiKeysCol(t).where('mode', '==', mode).get();
+  for (const d of snap.docs) {
+    const data = d.data() as ApiKeyDoc;
+    if (!data.mcpClientId) continue;
+    if (data.revokedAt) continue;
+    return { id: d.id, ...data };
+  }
+  return null;
 }
 
 export async function listMarketSnapshots(
