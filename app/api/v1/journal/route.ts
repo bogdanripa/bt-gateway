@@ -11,7 +11,7 @@
  * order by — callers should set it to an ISO string at write time.
  */
 
-import { requireApiKey } from '@/lib/auth/api-key';
+import { requireApiKey, assertWriteAccess } from '@/lib/auth/api-key';
 import { appendJournalEntry, listJournalEntries } from '@/lib/firestore';
 import { ok, readJsonObject, withRoute } from '@/lib/route-handler';
 import { assertAllowed, filterRecords, readRecordFields } from '@/lib/filters';
@@ -21,6 +21,7 @@ export const dynamic = 'force-dynamic';
 
 export const POST = withRoute(async (req) => {
   const caller = await requireApiKey(req);
+  assertWriteAccess(caller);
   const record = await readJsonObject(req);
   assertAllowed(caller.filters, readRecordFields(record));
   if (typeof record.timestamp !== 'string' || !record.timestamp) {

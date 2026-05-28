@@ -9,7 +9,7 @@
  * /api/v1/holdings; this is a convenience read.
  */
 
-import { requireApiKey } from '@/lib/auth/api-key';
+import { requireApiKey, assertWriteAccess } from '@/lib/auth/api-key';
 import { getPortfolioState, setPortfolioState } from '@/lib/firestore';
 import { ok, readJsonObject, withRoute } from '@/lib/route-handler';
 
@@ -24,6 +24,7 @@ export const GET = withRoute(async (req) => {
 
 export const PUT = withRoute(async (req) => {
   const caller = await requireApiKey(req);
+  assertWriteAccess(caller);
   const body = await readJsonObject(req);
   await setPortfolioState(caller.tenant, caller.mode, body);
   return ok({ mode: caller.mode, saved: true });

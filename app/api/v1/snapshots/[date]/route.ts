@@ -6,7 +6,7 @@
  * composing the rule-evaluator inputs.
  */
 
-import { requireApiKey } from '@/lib/auth/api-key';
+import { requireApiKey, assertWriteAccess } from '@/lib/auth/api-key';
 import { getMarketSnapshot, saveMarketSnapshot } from '@/lib/firestore';
 import { ok, readJsonObject, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
@@ -27,6 +27,7 @@ export const GET = withRoute<{ date: string }>(async (req, { params }) => {
 
 export const PUT = withRoute<{ date: string }>(async (req, { params }) => {
   const caller = await requireApiKey(req);
+  assertWriteAccess(caller);
   if (!DATE_RE.test(params.date)) {
     throw new ApiError('BAD_REQUEST', 'date must be YYYY-MM-DD');
   }

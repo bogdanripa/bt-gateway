@@ -93,6 +93,11 @@ export interface AuthenticatedCaller {
   keyId: string;
   /** Per-key filters. Undefined for keys created before the feature shipped. */
   filters?: ApiKeyFilters;
+  /**
+   * Permission scope. Legacy keys with no `access` field default to `rw`.
+   * Mutating routes (e.g. POST /api/v1/orders) reject `read` callers.
+   */
+  access: 'read' | 'rw';
 }
 
 /**
@@ -124,7 +129,7 @@ export async function authenticateApiKey(raw: string): Promise<AuthenticatedCall
     if (!timingSafeEqualStrings(keyDoc.hash, expectedHash)) {
       throw new ApiError('UNAUTHORIZED', 'API key not recognized');
     }
-    return finalizeAuth(tenant, mode, indexed.keyId, keyDoc.filters);
+    return finalizeAuth(tenant, mode, indexed.keyId, keyDoc.filters, keyDoc.access);
   }
 
   // --- Slow path: collectionGroup scan (for keys created before the index
@@ -141,6 +146,7 @@ export async function authenticateApiKey(raw: string): Promise<AuthenticatedCall
       mode: BtMode;
       revokedAt?: string;
       filters?: ApiKeyFilters;
+      access?: 'read' | 'rw';
     };
     if (data.mode !== mode) continue;
     if (data.revokedAt) continue;
@@ -155,7 +161,7 @@ export async function authenticateApiKey(raw: string): Promise<AuthenticatedCall
     // Backfill the hash index so this key hits the fast path next time.
     void setKeyHashIndex(expectedHash, uid, kid, mode).catch(() => { /* best-effort */ });
 
-    return finalizeAuth(tenant, mode, kid, data.filters);
+    return finalizeAuth(tenant, mode, kid, data.filters, data.access);
   }
 
   throw new ApiError('UNAUTHORIZED', 'API key not recognized');
@@ -166,6 +172,7 @@ function finalizeAuth(
   mode: BtMode,
   keyId: string,
   filters: ApiKeyFilters | undefined,
+  access: 'read' | 'rw' | undefined,
 ): AuthenticatedCaller {
   // Rate limit per key.
   const rl = checkRateLimit(`apikey:${keyId}`);
@@ -179,7 +186,7 @@ function finalizeAuth(
   // would add ~50ms to every authed call; we don't need it to block.
   void touchApiKey(tenant, keyId).catch(() => { /* swallow */ });
 
-  return { tenant, mode, keyId, filters };
+  return { tenant, mode, keyId, filters, access: access ?? 'rw' };
 }
 
 /**
@@ -190,6 +197,16 @@ export async function requireApiKey(req: NextRequest): Promise<AuthenticatedCall
   const raw = extractApiKey(req);
   if (!raw) throw new ApiError('UNAUTHORIZED', 'Missing API key');
   return authenticateApiKey(raw);
+}
+
+/**
+ * Reject read-only callers from mutating routes. Call at the top of every
+ * POST/PUT/PATCH/DELETE handler after `requireApiKey`.
+ */
+export function assertWriteAccess(caller: AuthenticatedCaller): void {
+  if (caller.access !== 'rw') {
+    throw new ApiError('FORBIDDEN', 'This API key is read-only');
+  }
 }
 
 // Re-export for UI pages that need the shape.
