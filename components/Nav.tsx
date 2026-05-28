@@ -12,9 +12,9 @@ export function Nav() {
 
   return (
     <div className="nav">
-      <span className="nav-brand">bt-gateway</span>
-      <Link href="/" className={pathname === '/' ? 'active' : ''}>Dashboard</Link>
-      <Link href="/settings" className={pathname?.startsWith('/settings') ? 'active' : ''}>Settings</Link>
+      <Link href="/" className="nav-brand">bt-gateway</Link>
+      <Link href="/console" className={pathname === '/console' ? 'active' : ''}>Dashboard</Link>
+      <Link href="/console/settings" className={pathname?.startsWith('/console/settings') ? 'active' : ''}>Settings</Link>
       <span className="spacer" />
       {user && (
         <div role="group" aria-label="Mode" style={{ display: 'flex', gap: '0.25rem' }}>

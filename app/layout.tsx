@@ -1,45 +1,64 @@
+/**
+ * Root HTML shell.
+ *
+ * Kept deliberately minimal so the marketing pages (`/`, `/setup/*`, `/docs`,
+ * `/privacy`, `/terms`) render as plain static HTML — no Firebase script, no
+ * auth providers, no client-side React beyond what each page opts into.
+ *
+ * Firebase initialization + the AuthProvider / ModeProvider context live in
+ * `app/console/layout.tsx` (the dashboard) and `app/oauth/layout.tsx` (the
+ * OAuth consent UI). Public pages don't pay for them.
+ */
+
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
-import Script from 'next/script';
-import { getFirebaseClientConfig } from '@/lib/firebase/public-config';
-import { AuthProvider } from '@/components/auth/AuthProvider';
-import { ModeProvider } from '@/components/mode/ModeProvider';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'bt-gateway',
-  description: 'Multi-tenant BT Trade HTTP gateway',
+  metadataBase: new URL(process.env.BT_GATEWAY_PUBLIC_URL ?? 'https://bt-gateway.bogdanripa.com'),
+  title: {
+    default: 'bt-gateway — REST + MCP gateway for Banca Transilvania trading',
+    template: '%s · bt-gateway',
+  },
+  description:
+    'bt-gateway is a multi-tenant HTTP gateway in front of bt-trade.ro. It exposes BT Trade as a REST API and as an MCP server for AI assistants like Claude, with stable refresh-token sessions, per-key filters, and OAuth-bound MCP connections.',
+  applicationName: 'bt-gateway',
+  authors: [{ name: 'Bogdan Ripa', url: 'https://github.com/bogdanripa' }],
+  keywords: [
+    'bt-trade',
+    'Banca Transilvania',
+    'BVB',
+    'Bursa de Valori Bucuresti',
+    'trading API',
+    'REST API',
+    'MCP',
+    'Model Context Protocol',
+    'Claude',
+    'AI trading',
+    'paper trading',
+    'demo account',
+  ],
+  openGraph: {
+    type: 'website',
+    siteName: 'bt-gateway',
+    locale: 'en_US',
+    title: 'bt-gateway — REST + MCP gateway for Banca Transilvania trading',
+    description:
+      'A stable bridge between you and BT Trade. Use it as a REST API, or connect Claude via MCP, with credential-grade encryption and per-key filters.',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'bt-gateway — REST + MCP gateway for Banca Transilvania trading',
+    description:
+      'A stable bridge between you and BT Trade. Use it as a REST API, or connect Claude via MCP.',
+  },
+  robots: { index: true, follow: true },
 };
 
-// IMPORTANT: force per-request rendering. The root layout injects the
-// Firebase Web SDK config from server env into the HTML via <Script>. If
-// the layout were static-rendered at build time, the GitHub Actions build
-// step would bake empty strings (the env vars live on Cloud Run, not in
-// the build image), and no amount of redeploy would refresh them.
-export const dynamic = 'force-dynamic';
-
 export default function RootLayout({ children }: { children: ReactNode }) {
-  // Server-side: read Firebase Web SDK config from env and inline it into
-  // the page so the client SDK can initialize without a network round-trip.
-  // These are NOT secrets (Firebase Web config is public by design).
-  const fb = getFirebaseClientConfig();
-
   return (
     <html lang="en">
-      <head>
-        <Script
-          id="bt-firebase-config"
-          strategy="beforeInteractive"
-          dangerouslySetInnerHTML={{
-            __html: `window.__bt_firebase__=${JSON.stringify(fb)};`,
-          }}
-        />
-      </head>
-      <body>
-        <AuthProvider>
-          <ModeProvider>{children}</ModeProvider>
-        </AuthProvider>
-      </body>
+      <body>{children}</body>
     </html>
   );
 }
