@@ -1,0 +1,16 @@
+{
+  "hosting": {
+    "site": "bt-gateway-bogdanripa",
+    "public": "public",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      {
+        "source": "**",
+        "run": {
+          "serviceId": "bt-gateway",
+          "region": "europe-west3"
+        }
+      }
+    ]
+  }
+}
