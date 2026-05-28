@@ -58,9 +58,9 @@ function AuthorizeBody() {
       .then((data) => {
         if (cancelled) return;
         setCtx(data);
-        // Default mode = first one with creds.
-        if (data.modes.live) setMode('live');
-        else if (data.modes.demo) setMode('demo');
+        // Default mode = demo when available (lower-risk first pick).
+        if (data.modes.demo) setMode('demo');
+        else if (data.modes.live) setMode('live');
       })
       .catch((e) => {
         if (cancelled) return;
@@ -134,33 +134,65 @@ function AuthorizeBody() {
 
       {hasAnyMode && (
         <>
-          <div style={{ marginTop: '1rem' }}>
-            <label style={{ display: 'block', marginBottom: '0.25rem' }}>Account</label>
-            <div className="row" style={{ gap: '0.5rem' }}>
-              {(['demo', 'live'] as const).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  className={`pill ${m}`}
-                  onClick={() => { setMode(m); setKeyId('__no_filters__'); }}
-                  disabled={!ctx.modes[m]}
-                  style={{
-                    cursor: ctx.modes[m] ? 'pointer' : 'not-allowed',
-                    opacity: ctx.modes[m] ? 1 : 0.4,
-                    outline: mode === m ? '2px solid var(--accent, #4f8cff)' : 'none',
-                  }}
-                  title={ctx.modes[m] ? '' : `No ${m} credentials configured`}
-                >
-                  {m}
-                </button>
-              ))}
+          <fieldset className="consent-group">
+            <legend>Account</legend>
+            <div className="consent-choice-grid">
+              {(['demo', 'live'] as const).map((m) => {
+                const available = ctx.modes[m];
+                const selected = mode === m;
+                return (
+                  <button
+                    key={m}
+                    type="button"
+                    className={`consent-choice consent-choice--${m}${selected ? ' is-selected' : ''}`}
+                    onClick={() => { setMode(m); setKeyId('__no_filters__'); }}
+                    disabled={!available}
+                    title={available ? '' : `No ${m} credentials configured`}
+                    aria-pressed={selected}
+                  >
+                    <span className="consent-choice__title">{m}</span>
+                    <span className="consent-choice__desc">
+                      {m === 'demo'
+                        ? 'Paper-trading account (play money). Safer first pick.'
+                        : 'Real account. Orders move real money.'}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
-          </div>
+          </fieldset>
 
-          <div style={{ marginTop: '1rem' }}>
-            <label htmlFor="oauth-keyid" style={{ display: 'block', marginBottom: '0.25rem' }}>
-              Filters
-            </label>
+          <fieldset className="consent-group">
+            <legend>What it can do</legend>
+            <div className="consent-choice-grid">
+              <button
+                type="button"
+                className={`consent-choice${access === 'read' ? ' is-selected' : ''}`}
+                onClick={() => setAccess('read')}
+                aria-pressed={access === 'read'}
+              >
+                <span className="consent-choice__title">Read only</span>
+                <span className="consent-choice__desc">
+                  See cash, holdings, and orders. Preview trades, but never place them.
+                </span>
+              </button>
+              <button
+                type="button"
+                className={`consent-choice${access === 'rw' ? ' is-selected' : ''}`}
+                onClick={() => setAccess('rw')}
+                aria-pressed={access === 'rw'}
+              >
+                <span className="consent-choice__title">Read &amp; place orders</span>
+                <span className="consent-choice__desc">
+                  Everything in &ldquo;Read only&rdquo;, plus the ability to place orders
+                  on your behalf.
+                </span>
+              </button>
+            </div>
+          </fieldset>
+
+          <fieldset className="consent-group">
+            <legend>Filters (optional)</legend>
             <select
               id="oauth-keyid"
               value={keyId}
@@ -168,62 +200,45 @@ function AuthorizeBody() {
               style={{ width: '100%' }}
               disabled={!mode}
             >
-              <option value="__no_filters__">No filters (full access in {mode ?? '—'})</option>
+              <option value="__no_filters__">No filters &mdash; full access in {mode ?? '—'}</option>
               {eligibleKeys.map((k) => (
                 <option key={k.id} value={k.id}>
                   {k.label}
-                  {k.hasFilters ? ' — inherits its filters' : ' — no filters'}
+                  {k.hasFilters ? ' — inherits its filters' : ''}
                 </option>
               ))}
             </select>
-            <p className="dim" style={{ fontSize: '0.8rem', marginTop: '0.25rem' }}>
-              The MCP connection borrows the filter rules from this key. Pick &ldquo;No
-              filters&rdquo; to grant unfiltered access within {mode ?? 'the chosen mode'}.
+            <p className="dim" style={{ fontSize: '0.8rem', marginTop: '0.4rem', marginBottom: 0 }}>
+              Borrow filter rules (market / currency / symbol allowlists) from one of your
+              existing API keys, or leave unfiltered.
             </p>
-          </div>
-
-          <div style={{ marginTop: '1rem' }}>
-            <label style={{ display: 'block', marginBottom: '0.25rem' }}>Access</label>
-            <div className="row" style={{ gap: '1rem', flexWrap: 'wrap' }}>
-              <label style={{ display: 'inline-flex', gap: '0.4rem', alignItems: 'center' }}>
-                <input
-                  type="radio"
-                  name="access"
-                  value="read"
-                  checked={access === 'read'}
-                  onChange={() => setAccess('read')}
-                />
-                Read-only (cash, holdings, orders, preview)
-              </label>
-              <label style={{ display: 'inline-flex', gap: '0.4rem', alignItems: 'center' }}>
-                <input
-                  type="radio"
-                  name="access"
-                  value="rw"
-                  checked={access === 'rw'}
-                  onChange={() => setAccess('rw')}
-                />
-                Read + place orders
-              </label>
-            </div>
-          </div>
+          </fieldset>
 
           {submitErr && (
             <div className="notice err" style={{ marginTop: '1rem' }}>{submitErr}</div>
           )}
 
-          <div className="row" style={{ marginTop: '1.5rem', gap: '0.5rem' }}>
-            <button onClick={() => { void onApprove(); }} disabled={!mode || submitting}>
+          <div className="consent-actions">
+            <button
+              className="consent-action consent-action--primary"
+              onClick={() => { void onApprove(); }}
+              disabled={!mode || submitting}
+            >
               {submitting ? 'Approving…' : 'Allow'}
             </button>
-            <button type="button" onClick={onDeny} disabled={submitting}>
+            <button
+              type="button"
+              className="consent-action consent-action--ghost"
+              onClick={onDeny}
+              disabled={submitting}
+            >
               Deny
             </button>
           </div>
 
           <p className="dim" style={{ fontSize: '0.75rem', marginTop: '1rem' }}>
-            Granting this consent revokes any prior MCP connection on the same mode. You can
-            revoke at any time from <a href="/console/settings">Settings</a>.
+            Granting this consent revokes any prior MCP connection on the same mode. You
+            can revoke at any time from <a href="/console/settings">Settings</a>.
           </p>
         </>
       )}

@@ -260,6 +260,97 @@ a.setup-card code { background: var(--bg-elev-2); padding: 0.05rem 0.3rem; borde
   user-select: all;
 }
 
+/* OAuth consent page: large card-style choice buttons + ghost deny. */
+.consent-group {
+  border: none;
+  padding: 0;
+  margin: 1.25rem 0 0;
+}
+.consent-group legend {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-dim);
+  margin-bottom: 0.5rem;
+  padding: 0;
+}
+.consent-choice-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+.consent-choice {
+  background: var(--bg-elev-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.9rem 1rem;
+  text-align: left;
+  cursor: pointer;
+  color: var(--fg);
+  font: inherit;
+  font-weight: 400;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-height: 78px;
+  transition: border-color 0.12s, background 0.12s;
+}
+.consent-choice:hover:not(:disabled) {
+  border-color: var(--fg-muted);
+  background: var(--bg-elev);
+}
+.consent-choice.is-selected {
+  border-color: var(--accent);
+  background: rgba(110, 168, 254, 0.08);
+}
+.consent-choice:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.consent-choice__title {
+  font-weight: 600;
+  font-size: 1rem;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--fg);
+}
+.consent-choice__desc {
+  font-size: 0.82rem;
+  color: var(--fg-dim);
+  line-height: 1.4;
+}
+.consent-choice--demo.is-selected {
+  background: rgba(110, 168, 254, 0.1);
+  border-color: var(--accent);
+}
+.consent-choice--demo.is-selected .consent-choice__title { color: var(--accent); }
+.consent-choice--live.is-selected {
+  background: rgba(74, 222, 128, 0.1);
+  border-color: var(--ok);
+}
+.consent-choice--live.is-selected .consent-choice__title { color: var(--ok); }
+
+.consent-actions {
+  display: flex;
+  gap: 0.6rem;
+  margin-top: 1.5rem;
+}
+.consent-action {
+  flex: 1;
+  padding: 0.7rem 1rem;
+  font-size: 0.95rem;
+}
+.consent-action--primary { /* default button colors already cover this */ }
+.consent-action--ghost {
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  font-weight: 400;
+}
+.consent-action--ghost:hover:not(:disabled) {
+  background: var(--bg-elev-2);
+}
+
 kbd, .mono-block {
   font-family: var(--mono);
   font-size: 0.82rem;
