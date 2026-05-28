@@ -1,5 +1,5 @@
 /**
- * Marketing landing for bt-gateway. Server-rendered to static HTML — no
+ * Marketing landing for BT Gateway. Server-rendered to static HTML — no
  * `'use client'`, no client-side React, no JS dependencies. Pure semantic
  * HTML for users, search engines, and AI crawlers alike.
  */
@@ -12,15 +12,15 @@ const SITE_URL =
   'https://bt-gateway.bogdanripa.com';
 
 export const metadata: Metadata = {
-  title: 'bt-gateway — REST + MCP gateway for Banca Transilvania trading',
+  title: 'BT Gateway — let Claude (or any app) work with your BT Trade account',
   description:
-    'Connect Banca Transilvania trading accounts (live and paper) to scripts, iOS Shortcuts, and AI assistants like Claude. REST API + MCP server with stable refresh-token sessions, per-key filters, and OAuth-bound MCP connections.',
+    'Connect your Banca Transilvania trading account to Claude or other AI assistants. See your portfolio in chat, ask for analysis, and place orders by voice or text — for live or demo accounts. Plus a clean REST API for scripts.',
   alternates: { canonical: `${SITE_URL}/` },
   openGraph: {
     url: `${SITE_URL}/`,
-    title: 'bt-gateway — REST + MCP gateway for Banca Transilvania trading',
+    title: 'BT Gateway — let Claude work with your BT Trade account',
     description:
-      'Use your BT Trade account from scripts or Claude. Stable refresh-token sessions, per-key filters, OAuth-bound MCP connections.',
+      'Connect your Banca Transilvania trading account to Claude or other AI assistants. See your portfolio in chat, ask for analysis, and place orders — live or demo.',
   },
 };
 
@@ -31,36 +31,36 @@ const jsonLd = {
       '@type': 'WebSite',
       '@id': `${SITE_URL}/#website`,
       url: `${SITE_URL}/`,
-      name: 'bt-gateway',
+      name: 'BT Gateway',
       inLanguage: 'en',
       description:
-        'A multi-tenant HTTP gateway in front of Banca Transilvania\'s BT Trade platform, exposing REST API and MCP server endpoints.',
+        'Connect a Banca Transilvania trading account to Claude and other AI assistants via the Model Context Protocol (MCP), plus a clean REST API.',
     },
     {
       '@type': 'SoftwareApplication',
       '@id': `${SITE_URL}/#software`,
-      name: 'bt-gateway',
+      name: 'BT Gateway',
       applicationCategory: 'FinanceApplication',
       operatingSystem: 'Web',
       url: `${SITE_URL}/`,
       description:
-        'REST API and MCP server for Banca Transilvania trading accounts (BT Trade / bt-trade.ro). Supports both live trading and paper-trading (demo) accounts. Connect Claude and other MCP clients via OAuth 2.1 with PKCE.',
+        'Bridge between your Banca Transilvania trading account and modern apps. Lets AI assistants like Claude check balances, look at positions, and place orders. Also provides a REST API for scripts. Works with both live trading and free demo accounts.',
       offers: { '@type': 'Offer', price: '0', priceCurrency: 'EUR' },
       featureList: [
-        'REST API for cash, holdings, orders, and instrument lookup',
-        'Order placement with preview, market, and limit support',
-        'MCP server for Claude and other AI assistants',
-        'OAuth 2.1 with PKCE for MCP authorization',
-        'Per-API-key filters (markets, currencies, symbols)',
-        'Stable refresh-token sessions on a reserved static egress IP',
-        'Cloud KMS envelope-encrypted credentials at rest',
-        'Optional per-tenant Telegram bot for audit alerts',
+        'Chat with Claude about your portfolio',
+        'Place trades from a conversation with an AI assistant',
+        'Read cash, holdings, and orders',
+        'Place orders with preview, market, and limit support',
+        'Per-key filters (markets, currencies, symbols)',
+        'Read-only vs. read + place orders permissions',
+        'Works with both live and demo (paper-trading) accounts',
+        'Optional Telegram alerts',
       ],
     },
     {
       '@type': 'Organization',
       '@id': `${SITE_URL}/#org`,
-      name: 'bt-gateway',
+      name: 'BT Gateway',
       url: `${SITE_URL}/`,
       sameAs: ['https://github.com/bogdanripa/bt-gateway'],
     },
@@ -77,125 +77,137 @@ export default function LandingPage() {
 
       <article>
         <header>
-          <h1>A stable bridge between you and BT Trade.</h1>
+          <h1>Bring your BT Trade account to Claude.</h1>
           <p className="lead">
-            <a href="https://bt-trade.ro" target="_blank" rel="noreferrer">BT Trade</a>{' '}
-            (Banca Transilvania&apos;s retail trading platform) has no public API and pins
-            refresh tokens to the IP that issued them. <strong>bt-gateway</strong> is a
-            multi-tenant HTTP gateway that keeps a single, stable identity alive on your
-            behalf — and exposes your account through clean, modern interfaces: a REST API
-            for scripts, and a Model Context Protocol (MCP) server for AI assistants like
-            Claude.
+            BT Gateway lets you ask{' '}
+            <a href="https://claude.ai" target="_blank" rel="noreferrer">Claude</a> (or
+            other AI assistants) about your Banca Transilvania trading account in plain
+            language. &ldquo;What&apos;s my cash balance?&rdquo; &ldquo;Show me my
+            positions.&rdquo; &ldquo;Place a buy order for 100 TVBETETF at market.&rdquo;
+            It works with your real account, or a free demo account if you&apos;d rather
+            try things out first.
           </p>
 
           <div className="cta-row">
-            <a href="/setup/live" className="button-link">
-              Set up a live account →
+            <a href="/setup/demo" className="button-link">
+              Set up a demo account →
             </a>
-            <a
-              href="/setup/demo"
-              className="button-link"
-              style={{
-                background: 'transparent',
-                color: 'var(--fg)',
-                border: '1px solid var(--border)',
-              }}
-            >
-              Set up a paper account →
+            <a href="/setup/live" className="button-link ghost">
+              Set up a live account →
             </a>
           </div>
         </header>
 
+        <section aria-labelledby="meet-claude">
+          <h2 id="meet-claude">Your BT account, inside Claude</h2>
+          <p>
+            Add BT Gateway as a connector inside Claude and your trading account shows up
+            as something Claude can see and act on. Ask it whatever you&apos;d normally
+            think about &mdash; how your portfolio is doing today, what your largest
+            position is, whether to take profits on a winner, or to place a specific
+            order. Claude reads from your account and (if you let it) places trades on
+            your behalf.
+          </p>
+          <p>
+            Setup takes a couple of minutes. You sign in to Claude, point its connector
+            at BT Gateway, sign in here with Google, and choose:
+          </p>
+          <ul>
+            <li>Whether Claude sees your <strong>live</strong> or <strong>demo</strong> account.</li>
+            <li>Whether it&apos;s <strong>read-only</strong> (look but don&apos;t touch) or can <strong>place orders</strong>.</li>
+            <li>Optional filters — limit Claude to specific markets, currencies, or symbols.</li>
+          </ul>
+          <p className="dim">
+            You can revoke its access at any time from the dashboard.
+          </p>
+        </section>
+
         <section aria-labelledby="account-types">
-          <h2 id="account-types">Pick the account you want to connect</h2>
+          <h2 id="account-types">Live or demo — pick where to start</h2>
           <div className="feature-grid">
+            <a href="/setup/demo" className="card setup-card">
+              <h3>
+                <span className="pill demo" style={{ marginRight: '0.5rem' }}>demo</span>
+                Try it with a demo account
+              </h3>
+              <p className="dim">
+                Create a free demo trading account on bt-trade.ro in a couple of clicks.
+                Same experience as the real thing &mdash; same balances, charts, orders
+                &mdash; just with play money. Perfect for trying Claude or BT Gateway for
+                the first time, with zero financial risk.
+              </p>
+            </a>
             <a href="/setup/live" className="card setup-card">
               <h3>
                 <span className="pill live" style={{ marginRight: '0.5rem' }}>live</span>
-                Real money
+                Connect your real account
               </h3>
               <p className="dim">
-                For your existing Banca Transilvania trading account. SMS-based two-factor
-                authentication on every fresh login. Orders move real money — use this when
-                you&apos;re ready to run live.
-              </p>
-            </a>
-            <a href="/setup/demo" className="card setup-card">
-              <h3>
-                <span className="pill demo" style={{ marginRight: '0.5rem' }}>paper</span>
-                Demo / paper trading
-              </h3>
-              <p className="dim">
-                Free virtual account you create on bt-trade.ro. Email-based two-factor
-                authentication. Same APIs and MCP tools, zero financial risk — ideal for
-                first-time setup or strategy testing.
+                Already have a Banca Transilvania trading account? Connect it once and
+                you can pull up your real portfolio in Claude any time. Orders place real
+                money, so we recommend trying the demo flow first.
               </p>
             </a>
           </div>
+        </section>
+
+        <section aria-labelledby="for-devs">
+          <h2 id="for-devs">For developers: a clean API</h2>
+          <p>
+            If you&apos;d rather drive the account from a script, an iOS Shortcut, or
+            your own app, BT Gateway also exposes a straightforward REST API. Generate
+            an API key from the dashboard, point your code at the endpoints, and read
+            cash, holdings, and orders or place trades. Each key can be scoped to specific
+            markets, currencies, or symbols, and can be made read-only.
+          </p>
+          <p className="dim" style={{ fontSize: '0.85rem' }}>
+            See the <a href="/docs">docs</a> for the endpoint reference.
+          </p>
         </section>
 
         <section aria-labelledby="why">
-          <h2 id="why">Why bt-gateway</h2>
+          <h2 id="why">Why BT Gateway</h2>
           <div className="feature-grid">
             <div className="card">
-              <h3>Stable session, always</h3>
+              <h3>Made for AI assistants</h3>
               <p className="dim">
-                Runs on Google Cloud Run with a reserved static egress IP and a single warm
-                instance so BT&apos;s refresh window never gets wasted. You sign in once;
-                the gateway keeps the token alive.
+                Built around the Model Context Protocol &mdash; the open standard Claude
+                and other modern AI tools use to talk to apps. No fragile screen-scraping,
+                no flaky browser automation: a real connection your assistant understands.
               </p>
             </div>
             <div className="card">
-              <h3>REST API for scripts</h3>
+              <h3>You stay in control</h3>
               <p className="dim">
-                Read cash, holdings, and orders. Preview or place trades. Authenticate with
-                a per-user API key (separate prefixes for demo and live — a compromised demo
-                key can&apos;t touch live by construction).
+                Every connection has a scope: live or demo, read-only or read + place
+                orders, optional symbol / market / currency filters. Revoke any
+                connection in one click from the dashboard.
               </p>
             </div>
             <div className="card">
-              <h3>MCP for AI assistants</h3>
+              <h3>Solid security defaults</h3>
               <p className="dim">
-                Connect Claude (or any MCP client) and let it inspect your portfolio, look
-                up instruments, and place trades — within filters and the read/write scope
-                you grant during OAuth consent.
+                Your BT credentials are encrypted at rest with Google Cloud KMS. API keys
+                are stored hashed (we never see the raw value after creation). Every order
+                placed on your behalf shows up in your own audit log &mdash; and
+                optionally on your own Telegram bot.
               </p>
             </div>
             <div className="card">
-              <h3>Defense in depth</h3>
+              <h3>Live <em>and</em> demo support</h3>
               <p className="dim">
-                Credentials are envelope-encrypted with Google Cloud KMS. API keys are
-                stored as SHA-256 hashes. Every mutating action is audited and (optionally)
-                pushed to your own Telegram bot. No shared service tokens, no plaintext at
-                rest.
+                Both account types are fully isolated &mdash; separate credentials,
+                separate keys, separate connections. A demo connection physically cannot
+                touch your real money, even if compromised.
               </p>
             </div>
           </div>
         </section>
 
-        <section aria-labelledby="how-it-fits">
-          <h2 id="how-it-fits">How it fits together</h2>
-          <ul>
-            <li>
-              <strong>API keys</strong> — bearer tokens (
-              <code>bvb_demo_…</code> / <code>bvb_live_…</code>) for scripts, cron jobs, and
-              iOS Shortcuts. Per-key filters by market, currency, or symbol.
-            </li>
-            <li>
-              <strong>MCP connector</strong> — OAuth-bound, one connection at a time per
-              mode. Same filter rules; same audit feed.
-            </li>
-            <li>
-              <strong>Dashboard</strong> — Firebase-authenticated UI for credentials, keys,
-              Telegram bot, and the audit log.
-            </li>
-          </ul>
-        </section>
-
         <p className="dim" style={{ marginTop: '2rem', fontSize: '0.85rem' }}>
-          bt-gateway is not affiliated with Banca Transilvania or BT Capital Partners. It
-          proxies calls to bt-trade.ro on your behalf, using credentials you supply. Use at
-          your own risk and within BT&apos;s terms of service.
+          BT Gateway is not affiliated with Banca Transilvania or BT Capital Partners. It
+          uses credentials you provide to act on your behalf on bt-trade.ro. Use at your
+          own risk and within BT&apos;s terms of service.
         </p>
       </article>
     </MarketingShell>

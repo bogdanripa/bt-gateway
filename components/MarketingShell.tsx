@@ -15,9 +15,12 @@ export function MarketingShell({ children }: { children: ReactNode }) {
   return (
     <>
       <header className="nav">
-        <a href="/" className="nav-brand">bt-gateway</a>
+        <a href="/" className="nav-brand">
+          <img src="/icon.svg" alt="" width={28} height={28} />
+          <span>BT Gateway</span>
+        </a>
         <a href="/setup/live">Live setup</a>
-        <a href="/setup/demo">Paper setup</a>
+        <a href="/setup/demo">Demo setup</a>
         <a href="/docs">Docs</a>
         <span className="spacer" />
         <a href="/console" className="button-link">Open dashboard →</a>
@@ -34,7 +37,7 @@ export function MarketingShell({ children }: { children: ReactNode }) {
             padding: '1.5rem 1.25rem',
           }}
         >
-          <span className="muted">bt-gateway</span>
+          <span className="muted">BT Gateway</span>
           <span className="spacer" style={{ flex: 1 }} />
           <a href="/docs">Docs</a>
           <a href="/privacy">Privacy</a>

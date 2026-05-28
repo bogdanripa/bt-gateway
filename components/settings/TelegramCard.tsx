@@ -80,7 +80,7 @@ export function TelegramCard({ botConfigured }: { botConfigured: boolean }) {
       <h2>Chat link</h2>
       <p className="dim">
         Link your personal Telegram chat so the bot (configured above) can
-        message you when bt-gateway signs in or when a sign-in fails. Routine
+        message you when BT Gateway signs in or when a sign-in fails. Routine
         refreshes every ~45 minutes do <em>not</em> trigger a message.
       </p>
 

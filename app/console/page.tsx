@@ -18,9 +18,9 @@ export default function HomePage() {
         </div>
         <h2 style={{ marginTop: '2rem' }}>Audit log</h2>
         <p className="dim">
-          Everything bt-gateway does on your behalf — sign-ins, refreshes, orders,
-          credential and key changes — is logged below. Read operations (cash,
-          holdings, quotes) are not audited here; they live in Cloud Logging.
+          Every action BT Gateway takes on your behalf — sign-ins, refreshes, orders,
+          credential and key changes — is logged below. Read-only operations (cash,
+          holdings, quotes) are not audited here.
         </p>
         <AuditFeed />
       </main>

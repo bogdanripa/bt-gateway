@@ -53,7 +53,14 @@ small { color: var(--fg-muted); }
   background: var(--bg-elev);
   border-bottom: 1px solid var(--border);
 }
-.nav-brand { font-weight: 600; font-size: 1rem; }
+.nav-brand {
+  font-weight: 600;
+  font-size: 1rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.nav-brand img { display: block; }
 .nav a { color: var(--fg-dim); }
 .nav a:hover, .nav a.active { color: var(--fg); text-decoration: none; }
 .nav a.nav-brand { color: var(--fg); }
@@ -204,6 +211,16 @@ th { color: var(--fg-dim); font-weight: 500; font-size: 0.78rem; text-transform:
   text-decoration: none;
 }
 .button-link:hover { background: var(--accent-hover); text-decoration: none; }
+
+.button-link.ghost {
+  background: transparent;
+  color: var(--fg) !important;
+  border: 1px solid var(--border);
+}
+.button-link.ghost:hover {
+  background: var(--bg-elev-2);
+  color: var(--fg) !important;
+}
 
 a.setup-card {
   display: block;

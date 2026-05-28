@@ -39,7 +39,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (status === 'signed-out') {
     return (
       <main className="container" style={{ maxWidth: 420, textAlign: 'center', paddingTop: '6rem' }}>
-        <h1>bt-gateway</h1>
+        <img src="/icon.svg" alt="" width={48} height={48} style={{ marginBottom: '0.75rem' }} />
+        <h1>BT Gateway</h1>
         <p className="dim">Sign in with Google to manage your BT Trade credentials and API keys.</p>
         <button onClick={() => { void signIn(); }} style={{ marginTop: '1.5rem' }}>
           Sign in with Google

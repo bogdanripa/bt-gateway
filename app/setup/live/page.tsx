@@ -10,61 +10,55 @@ const SITE_URL =
   'https://bt-gateway.bogdanripa.com';
 
 export const metadata: Metadata = {
-  title: 'Set up a live Banca Transilvania trading account with bt-gateway',
+  title: 'Set up a live BT Trade account with BT Gateway',
   description:
-    'Step-by-step guide to connecting your real bt-trade.ro account to bt-gateway: SMS-OTP forwarding via iOS Shortcuts + ntfy, credential setup in the dashboard, API key creation, and connecting Claude via MCP.',
+    'Connect your real Banca Transilvania trading account to Claude and other apps via BT Gateway. Step-by-step setup: SMS-OTP forwarding, credentials, and connecting Claude.',
   alternates: { canonical: `${SITE_URL}/setup/live` },
   openGraph: {
     url: `${SITE_URL}/setup/live`,
-    title: 'Set up a live Banca Transilvania account with bt-gateway',
+    title: 'Set up a live Banca Transilvania account with BT Gateway',
     description:
-      'Connect your real BT Trade account to bt-gateway with SMS-OTP forwarding and stable refresh-token sessions.',
+      'Bring your real BT Trade account into Claude. Step-by-step setup, with the same security you use to log in to the BT app today.',
   },
 };
 
 const howToLd = {
   '@context': 'https://schema.org',
   '@type': 'HowTo',
-  name: 'Set up a live Banca Transilvania account with bt-gateway',
+  name: 'Set up a live Banca Transilvania account with BT Gateway',
   description:
-    'How to connect a real bt-trade.ro live trading account to bt-gateway, including SMS-OTP forwarding, credential setup, API key creation, and optional Claude MCP connection.',
+    'How to connect your real bt-trade.ro account to BT Gateway. Includes SMS-code forwarding, credentials setup, and connecting Claude.',
   totalTime: 'PT15M',
   step: [
     {
       '@type': 'HowToStep',
       position: 1,
       name: 'Prerequisites',
-      text: 'Have an active bt-trade.ro account, a mobile phone receiving BT SMS OTPs, and a Google account for the bt-gateway dashboard.',
+      text: 'Have an active bt-trade.ro account, a mobile phone that receives BT SMS codes, and a Google account for the BT Gateway dashboard.',
     },
     {
       '@type': 'HowToStep',
       position: 2,
-      name: 'Install the SMS-forwarding shortcut',
-      text: 'Install the ntfy iOS app and create a Shortcuts automation triggered on SMS from BT that POSTs the message body to your ntfy topic.',
+      name: 'Forward BT login codes to BT Gateway',
+      text: 'Set up a small Shortcuts automation (iPhone) or Tasker macro (Android) that POSTs the body of any SMS from BT to your personal forwarder URL.',
     },
     {
       '@type': 'HowToStep',
       position: 3,
-      name: 'Configure credentials',
-      text: 'Sign in to the bt-gateway dashboard with Google, switch to live mode, enter your BT username and password (envelope-encrypted with Cloud KMS), copy the displayed ntfy topic into the SMS-forwarder.',
+      name: 'Add your credentials in the dashboard',
+      text: 'Sign in to the BT Gateway dashboard, switch to live, enter your BT username and password, and paste the forwarder URL into the automation.',
     },
     {
       '@type': 'HowToStep',
       position: 4,
-      name: 'First login',
-      text: 'Trigger any read endpoint; BT sends an SMS, your phone forwards it to ntfy, bt-gateway picks it up and completes the login.',
+      name: 'First sign-in',
+      text: 'Click Refresh account data. BT sends an SMS, the forwarder hands the code to BT Gateway, and the dashboard loads.',
     },
     {
       '@type': 'HowToStep',
       position: 5,
-      name: 'Generate API keys (optional)',
-      text: 'In Settings, create bvb_live_… API keys for scripts. Scope each key with market/currency/symbol filters and a read-only or read+write access level.',
-    },
-    {
-      '@type': 'HowToStep',
-      position: 6,
-      name: 'Connect Claude via MCP (optional)',
-      text: 'In Claude → Settings → Connectors → Add custom connector, paste the bt-gateway /mcp URL, walk the OAuth flow, and pick the live mode plus the desired access level.',
+      name: 'Connect Claude (optional)',
+      text: 'Add BT Gateway as a custom connector in Claude. Pick live and choose read-only or "can place orders". For a real-money account, read-only is the safer first step.',
     },
   ],
 };
@@ -80,7 +74,7 @@ export default function SetupLivePage() {
       <article>
         <header>
           <h1>
-            Set up your{' '}
+            Set up a{' '}
             <span
               className="pill live"
               style={{ fontSize: '1.5rem', verticalAlign: 'middle' }}
@@ -90,9 +84,10 @@ export default function SetupLivePage() {
             account
           </h1>
           <p className="lead">
-            Connect bt-gateway to your real Banca Transilvania trading account. Orders
-            placed through this account move actual money. If you just want to experiment,
-            use the <a href="/setup/demo">paper-trading setup</a> instead.
+            Connect BT Gateway to your real Banca Transilvania trading account. Orders
+            placed through this account move real money &mdash; if you&apos;re just
+            curious how things work, the{' '}
+            <a href="/setup/demo">demo setup</a> is the safer place to start.
           </p>
         </header>
 
@@ -101,23 +96,24 @@ export default function SetupLivePage() {
           <ul>
             <li>
               An active{' '}
-              <a href="https://bt-trade.ro" target="_blank" rel="noreferrer">bt-trade.ro</a>{' '}
-              account that can log in via the web UI today.
+              <a href="https://bt-trade.ro" target="_blank" rel="noreferrer">
+                bt-trade.ro
+              </a>{' '}
+              account you can sign into via the BT website today.
             </li>
-            <li>A mobile phone receiving BT&apos;s SMS one-time passwords. Required on every fresh login.</li>
-            <li>A Google account for signing into <a href="/console">bt-gateway&apos;s dashboard</a>.</li>
+            <li>The phone that receives BT&apos;s SMS codes on every sign-in.</li>
+            <li>A Google account for the <a href="/console">BT Gateway dashboard</a>.</li>
           </ul>
         </section>
 
         <section aria-labelledby="step-sms">
-          <h2 id="step-sms">2. Install the SMS-forwarding shortcut</h2>
+          <h2 id="step-sms">2. Forward BT&apos;s SMS codes to BT Gateway</h2>
           <p>
-            BT prompts for an SMS OTP whenever a fresh login is required. bt-gateway listens
-            for that OTP on a per-account{' '}
-            <a href="https://ntfy.sh" target="_blank" rel="noreferrer">ntfy</a> topic, so we
-            need your phone to forward incoming BT SMS bodies to that topic.
+            BT requires an SMS code each time a fresh login is needed. A tiny automation
+            on your phone forwards that code to BT Gateway, so the sign-in completes
+            without you copying anything manually.
           </p>
-          <h3>iOS</h3>
+          <h3>On iPhone (Shortcuts)</h3>
           <ol>
             <li>
               Install the{' '}
@@ -126,76 +122,82 @@ export default function SetupLivePage() {
                 target="_blank"
                 rel="noreferrer"
               >
-                ntfy iOS app
+                ntfy app
               </a>{' '}
-              (free).
-            </li>
-            <li>Open Shortcuts → Automation → New → <strong>Message</strong>.</li>
-            <li>
-              Trigger: <strong>From contact</strong> → add BT&apos;s sender ID (typically{' '}
-              <code>BT</code> or <code>BT24</code>); <strong>Message contains</strong> →
-              leave blank; <strong>Run immediately</strong> on.
+              from the App Store.
             </li>
             <li>
-              Action: <strong>Get contents of URL</strong> →{' '}
-              <code>https://ntfy.sh/&lt;your-topic&gt;</code>, method POST, request body =
-              the message text.
+              Open <strong>Shortcuts → Automation → New → Message</strong>.
+            </li>
+            <li>
+              Set the trigger to <strong>From contact</strong> with BT&apos;s sender ID
+              (typically <code>BT</code> or <code>BT24</code>), and turn on{' '}
+              <strong>Run immediately</strong>.
+            </li>
+            <li>
+              Add a <strong>Get contents of URL</strong> action: method POST, URL is the
+              forwarder address shown on your BT Gateway dashboard, body is the SMS text.
             </li>
           </ol>
-          <h3>Android</h3>
+          <h3>On Android</h3>
           <p className="dim">
             Use Tasker or MacroDroid with an &ldquo;SMS Received&rdquo; trigger and a
-            matching HTTP POST action. The ntfy app also has a built-in &ldquo;Send
-            notifications via HTTP POST&rdquo; doc that walks through the recipe.
+            matching HTTP POST action.
           </p>
         </section>
 
         <section aria-labelledby="step-creds">
-          <h2 id="step-creds">3. Configure credentials</h2>
+          <h2 id="step-creds">3. Add your credentials in the dashboard</h2>
           <ol>
-            <li>Open <a href="/console">the dashboard</a> and sign in with Google.</li>
+            <li>Open the <a href="/console">BT Gateway dashboard</a> and sign in with Google.</li>
             <li>
-              Go to <strong>Settings → Credentials</strong>, switch the global toggle to{' '}
-              <span className="pill live">live</span>, and enter your BT username + password.
-              They are envelope-encrypted with Cloud KMS before being stored.
+              Go to <strong>Settings → Credentials</strong>, switch the toggle at the top
+              to <span className="pill live">live</span>, and enter your BT username and
+              password.
             </li>
-            <li>The dashboard shows the ntfy topic name your phone needs to post to — copy it into the Shortcut you set up in step 2.</li>
+            <li>The dashboard shows your personal forwarder URL — copy it into the automation you set up in step 2.</li>
           </ol>
+          <p className="dim">
+            Your password is encrypted at rest. We never see it again after you enter it,
+            and it&apos;s only used to sign in to your BT account on your behalf.
+          </p>
         </section>
 
         <section aria-labelledby="step-login">
-          <h2 id="step-login">4. First login</h2>
+          <h2 id="step-login">4. First sign-in</h2>
           <p>
-            Trigger any read endpoint (e.g. the dashboard&apos;s{' '}
-            <strong>Refresh account data</strong> button) to kick off the first login. BT
-            will send an SMS, your phone forwards it to ntfy, bt-gateway picks it up
-            automatically, and the dashboard refreshes. After this, the refresh-token cycle
-            keeps you signed in — no more OTPs until you switch IPs or BT invalidates the
-            session.
+            Click <strong>Refresh account data</strong>. BT sends an SMS, your phone
+            forwards it over, and BT Gateway signs you in. After this, the connection
+            stays alive on its own &mdash; no more codes to type.
           </p>
         </section>
 
-        <section aria-labelledby="step-keys">
-          <h2 id="step-keys">5. Generate API keys (optional)</h2>
+        <section aria-labelledby="step-claude">
+          <h2 id="step-claude">5. Connect Claude (optional)</h2>
           <p>
-            Under <strong>Settings → Access</strong>, create a <code>bvb_live_…</code> key
-            for any scripts or iOS Shortcuts that should drive the account. You can scope
-            each key with market / currency / symbol allow- and deny-lists, and choose
-            between read-only and read + write at creation.
-          </p>
-        </section>
-
-        <section aria-labelledby="step-mcp">
-          <h2 id="step-mcp">6. Connect Claude via MCP (optional)</h2>
-          <p>
-            In Claude → <strong>Settings → Connectors → Add custom connector</strong>, paste:
+            In{' '}
+            <a href="https://claude.ai" target="_blank" rel="noreferrer">
+              Claude
+            </a>
+            , go to <strong>Settings → Connectors → Add custom connector</strong>, and
+            paste:
           </p>
           <pre className="mono-block">https://bt-gateway.bogdanripa.com/mcp</pre>
           <p>
-            Claude walks the OAuth flow. Pick <strong>live</strong>, optionally inherit
-            filters from an existing API key, and choose <strong>read-only</strong> or{' '}
-            <strong>read + place orders</strong>. Be deliberate here — read + write on a
-            live account means Claude can move real money.
+            Sign in with Google when prompted, pick <strong>live</strong>, and choose
+            whether Claude can just look (<em>read-only</em>) or also place orders. For
+            a real-money account we suggest read-only at first &mdash; you can always
+            grant write access later.
+          </p>
+        </section>
+
+        <section aria-labelledby="step-api">
+          <h2 id="step-api">Optional: API keys for scripts</h2>
+          <p>
+            If you want to drive the account from your own code, go to{' '}
+            <strong>Settings → Access</strong> and create an API key. Each key can be
+            scoped to specific markets, currencies, or symbols, and you can make it
+            read-only so it can&apos;t place orders even if it leaks.
           </p>
         </section>
 

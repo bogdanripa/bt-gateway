@@ -12,7 +12,10 @@ export function Nav() {
 
   return (
     <div className="nav">
-      <Link href="/" className="nav-brand">bt-gateway</Link>
+      <Link href="/" className="nav-brand">
+        <img src="/icon.svg" alt="" width={24} height={24} />
+        <span>BT Gateway</span>
+      </Link>
       <Link href="/console" className={pathname === '/console' ? 'active' : ''}>Dashboard</Link>
       <Link href="/console/settings" className={pathname?.startsWith('/console/settings') ? 'active' : ''}>Settings</Link>
       <span className="spacer" />

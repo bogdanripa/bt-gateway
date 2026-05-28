@@ -122,7 +122,7 @@ function AuthorizeBody() {
         Authorize <strong>{ctx.client.client_name}</strong>?
       </h2>
       <p className="dim" style={{ marginTop: '-0.5rem' }}>
-        It is asking to access your BT Trade data via bt-gateway.
+        It is asking to access your BT Trade data via BT Gateway.
       </p>
 
       {!hasAnyMode && (
