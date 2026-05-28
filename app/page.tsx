@@ -130,7 +130,13 @@ export default function LandingPage() {
           </p>
           <p>
             Setup takes a couple of minutes. You sign in to Claude, point its connector
-            at BT Gateway, sign in here with Google, and choose:
+            at BT Gateway:
+          </p>
+          <pre className="mono-block" style={{ display: 'block', userSelect: 'all' }}>
+            https://bt-gateway.bogdanripa.com/mcp
+          </pre>
+          <p>
+            Then sign in here with Google, and choose:
           </p>
           <ul>
             <li>Whether Claude sees your <strong>live</strong> or <strong>demo</strong> account.</li>
