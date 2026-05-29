@@ -203,11 +203,14 @@ done
 
 # Runtime SA roles: read/write Firestore, KMS encrypt/decrypt for tenant creds,
 # log writer (implicit), and act-as-itself so Cloud Scheduler → Cloud Run can
-# use OIDC with this identity.
+# use OIDC with this identity. `logging.viewer` lets the /check-logs skill read
+# this service's Cloud Logging entries when it runs headless (routine / Claude
+# on phone) using a key for this same SA — see .claude/skills/check-logs.
 for role in \
   roles/datastore.user \
   roles/cloudkms.cryptoKeyEncrypterDecrypter \
-  roles/secretmanager.secretAccessor; do
+  roles/secretmanager.secretAccessor \
+  roles/logging.viewer; do
   run gcloud projects add-iam-policy-binding "$PROJECT_ID" \
     --member="serviceAccount:${RUNTIME_SA_EMAIL}" \
     --role="$role" \
