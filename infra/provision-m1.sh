@@ -304,7 +304,7 @@ if ! gcloud run services describe "$SERVICE_NAME" \
     --platform=managed \
     --allow-unauthenticated \
     --min-instances=1 \
-    --max-instances=5 \
+    --max-instances=1 \
     --cpu=1 --memory=512Mi \
     --service-account="$RUNTIME_SA_EMAIL" \
     --vpc-connector="$CONNECTOR_NAME" \

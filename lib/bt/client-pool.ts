@@ -50,6 +50,16 @@ import {
   type TenantRef,
 } from '../firestore';
 
+/**
+ * Tenants with a `login()` currently in flight. Guarantees at most ONE BT
+ * sign-in at a time per tenant, so demo + live (and any concurrent request)
+ * can't each fire their own 2FA — which BT emails to the same person, and
+ * whose codes then collide / invalidate each other. In-memory is sufficient
+ * because the service runs as a single Cloud Run instance (--max-instances=1);
+ * there is deliberately no cross-instance coordination.
+ */
+const loginInProgress = new Set<string>();
+
 interface PoolEntry {
   client: BTTradeClient;
   /** The username that was used to log in — cached for log context only. */
@@ -76,7 +86,25 @@ function btLog(uid: string, mode: BtMode): (msg: string, data?: unknown) => void
   };
 }
 
-async function buildClient(t: TenantRef, mode: BtMode): Promise<PoolEntry> {
+/**
+ * Build the canonical "session is dead, only an OTP login can recover it"
+ * error. Distinct 503 code (`SESSION_EXPIRED`) so programmatic callers can
+ * tell it apart from a real upstream 502 and fall back to cached data /
+ * prompt a human to re-auth, instead of blindly retrying.
+ */
+function sessionExpiredError(t: TenantRef, mode: BtMode, stage: string): ApiError {
+  const message =
+    stage === 'login-in-progress'
+      ? `BT ${mode} sign-in already in progress — retry shortly`
+      : `BT ${mode} session expired — sign in to restore live data`;
+  return new ApiError('SESSION_EXPIRED', message, { context: { uid: t.uid, mode, stage } });
+}
+
+async function buildClient(
+  t: TenantRef,
+  mode: BtMode,
+  interactive: boolean,
+): Promise<PoolEntry> {
   const creds = await getBtCreds(t, mode);
   if (!creds) {
     throw new ApiError(
@@ -187,6 +215,24 @@ async function buildClient(t: TenantRef, mode: BtMode): Promise<PoolEntry> {
     }
   }
 
+  // Non-interactive callers (e.g. /api/v1/session/refresh, which only rotates
+  // a token) must NOT trigger the blocking OTP login. Fail fast so they don't
+  // hang on the phone.
+  if (!interactive) {
+    throw sessionExpiredError(t, mode, 'login-required');
+  }
+
+  // Single-login guard: if this tenant already has a sign-in underway (e.g. a
+  // demo request triggered login and now a live request lands, or a retry
+  // arrives mid-login), fail fast instead of starting a second login. A second
+  // login would email the user another OTP, and the two codes collide /
+  // invalidate each other. The caller retries and rides the established
+  // session once this login completes.
+  if (loginInProgress.has(t.uid)) {
+    throw sessionExpiredError(t, mode, 'login-in-progress');
+  }
+  loginInProgress.add(t.uid);
+
   // Full login — blocks until the phone posts an OTP to ntfy (up to 5 min).
   try {
     await client.login({ username, password });
@@ -208,6 +254,8 @@ async function buildClient(t: TenantRef, mode: BtMode): Promise<PoolEntry> {
     throw new ApiError('UPSTREAM_UNAVAILABLE', `BT ${mode} sign-in failed: ${msg}`, {
       context: { uid: t.uid, mode, stage: 'login' },
     });
+  } finally {
+    loginInProgress.delete(t.uid);
   }
 
   await audit({
@@ -224,11 +272,29 @@ async function buildClient(t: TenantRef, mode: BtMode): Promise<PoolEntry> {
 }
 
 /**
+ * Options shared by the session entry points.
+ *
+ * `interactive` (default true) controls what happens when the session is dead
+ * and the ONLY way to recover is a full `login()` with its blocking OTP wait:
+ *   - true  → run login() (a human is present, e.g. the dashboard).
+ *   - false → throw `SESSION_EXPIRED` immediately (programmatic API reads and
+ *             the cron — nobody is around to forward an OTP).
+ */
+export interface SessionOptions {
+  interactive?: boolean;
+}
+
+/**
  * Get (or lazily construct) the BTTradeClient for this tenant + mode.
  * Callers MUST NOT cache the returned client across requests — it may be
  * evicted from the pool at any time (e.g., on session expiry).
  */
-export async function getBtClient(t: TenantRef, mode: BtMode): Promise<BTTradeClient> {
+export async function getBtClient(
+  t: TenantRef,
+  mode: BtMode,
+  opts: SessionOptions = {},
+): Promise<BTTradeClient> {
+  const interactive = opts.interactive ?? true;
   const k = key(t, mode);
   const hit = pool.get(k);
   if (hit) return hit.client;
@@ -236,7 +302,7 @@ export async function getBtClient(t: TenantRef, mode: BtMode): Promise<BTTradeCl
   const pending = inflight.get(k);
   if (pending) return (await pending).client;
 
-  const p = buildClient(t, mode)
+  const p = buildClient(t, mode, interactive)
     .then((entry) => {
       pool.set(k, entry);
       return entry;
@@ -284,18 +350,34 @@ export async function runWithSession<T>(
   tenant: TenantRef,
   mode: BtMode,
   op: (client: BTTradeClient) => Promise<T>,
+  opts: SessionOptions = {},
 ): Promise<T> {
-  const client = await getBtClient(tenant, mode);
+  const interactive = opts.interactive ?? true;
+  const client = await getBtClient(tenant, mode, { interactive });
   try {
     return await op(client);
   } catch (e) {
     if (!isSessionExpired(e)) throw e;
-    // onExpired may already have evicted the pool entry; call again to be
-    // sure, then rebuild. The rebuild will restore from snapshot if it's
-    // still valid (skipping OTP), otherwise prompt for a fresh login.
+    // The op failed because the transport's refresh-after-401 gave up — the
+    // persisted snapshot's refresh token is dead. Drop it so the rebuild does
+    // a fresh (lock-guarded) login instead of restoring the same dead session
+    // and 401-looping. onExpired may already have evicted the pool entry; call
+    // again to be sure.
     evictBtClient(tenant, mode);
-    const fresh = await getBtClient(tenant, mode);
-    return op(fresh);
+    await deleteBtSession(tenant, mode);
+    try {
+      const fresh = await getBtClient(tenant, mode, { interactive });
+      return await op(fresh);
+    } catch (e2) {
+      // A stale-but-present snapshot restores fine, then the op 401s and the
+      // transport's refresh dies — surfacing as an AuthError, not the clean
+      // SESSION_EXPIRED that buildClient throws when there's no snapshot.
+      // Normalize both to one code on the non-interactive (read) path.
+      if (!interactive && isSessionExpired(e2)) {
+        throw sessionExpiredError(tenant, mode, 'refresh-failed');
+      }
+      throw e2;
+    }
   }
 }
 
@@ -314,8 +396,10 @@ export async function runWithSessionMutating<T>(
   tenant: TenantRef,
   mode: BtMode,
   op: (client: BTTradeClient) => Promise<T>,
+  opts: SessionOptions = {},
 ): Promise<T> {
-  const client = await getBtClient(tenant, mode);
+  const interactive = opts.interactive ?? true;
+  const client = await getBtClient(tenant, mode, { interactive });
   return op(client);
 }
 

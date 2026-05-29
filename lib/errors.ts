@@ -24,6 +24,7 @@ export type ApiErrorCode =
   | 'RATE_LIMITED'
   | 'CONFLICT'
   | 'UPSTREAM_UNAVAILABLE' // BT Trade returned non-2xx or network error
+  | 'SESSION_EXPIRED' // BT session is dead and recovery needs an interactive OTP login
   | 'INTERNAL';
 
 const DEFAULT_STATUS: Record<ApiErrorCode, number> = {
@@ -34,6 +35,7 @@ const DEFAULT_STATUS: Record<ApiErrorCode, number> = {
   RATE_LIMITED: 429,
   CONFLICT: 409,
   UPSTREAM_UNAVAILABLE: 502,
+  SESSION_EXPIRED: 503,
   INTERNAL: 500,
 };
 

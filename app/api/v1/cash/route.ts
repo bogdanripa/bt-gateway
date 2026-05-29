@@ -53,8 +53,12 @@ function cashCurrency(entry: unknown): string | undefined {
 export const GET = withRoute(async (req) => {
   const caller = await requireApiKey(req);
 
-  // Wrap BT interaction in runWithSession so a dead session rebuilds (with
-  // the OTP wait) rather than 502-ing every request until manually unstuck.
+  // Wrap BT interaction in runWithSession so a dead session auto-recovers
+  // (login() feeds off the ntfy OTP shortcut). The in-memory per-tenant
+  // loginInProgress guard (load-bearing on the single pinned instance)
+  // guarantees only one login / one outstanding OTP at a time; if a login is
+  // already underway this throws SESSION_EXPIRED (503) and the caller retries
+  // — picking up the fresh session once it lands.
   const { portfolioKey, cash, errors } = await runWithSession(caller.tenant, caller.mode, async (client) => {
     const pk = await getPortfolioKey(caller.tenant, caller.mode, client);
 

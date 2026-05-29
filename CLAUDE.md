@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this service is
 
-Multi-tenant HTTP gateway in front of [BT Trade](https://bt-trade.ro) (Banca Transilvania's retail trading platform). The whole reason it exists: BT pins session refresh tokens to the IP that issued them, so the service runs on Cloud Run with a **static egress IP** (VPC Connector → Cloud NAT → reserved static external IP) and `min-instances=1` so one long-lived identity keeps refresh tokens alive. Two-sided product:
+Multi-tenant HTTP gateway in front of [BT Trade](https://bt-trade.ro) (Banca Transilvania's retail trading platform). The whole reason it exists: BT pins session refresh tokens to the IP that issued them, so the service runs on Cloud Run with a **static egress IP** (VPC Connector → Cloud NAT → reserved static external IP) and `min-instances=1` / `max-instances=1` so exactly one long-lived identity keeps refresh tokens alive. The single-instance pin is **load-bearing**: the BT sign-in single-login guard (`loginInProgress` in `lib/bt/client-pool.ts`) is in-memory, so running more than one instance would let two logins fire at once and email the user duplicate, mutually-invalidating OTP codes. Two-sided product:
 
 - **`/api/v1/*`** — REST API authenticated by API keys (`Authorization: Bearer bvb_<mode>_<24 chars>`) for trading bots, scripts, iOS Shortcuts.
 - **`/api/ui/*` + pages** — Next.js web UI authenticated by Firebase ID tokens (Google sign-in) for managing credentials, API keys, Telegram, and viewing the audit feed.
@@ -104,7 +104,7 @@ Outbound is `notifyTenant(tenant, text)` in `lib/telegram.ts` — silent no-op i
 - **Validation**: use `zod` schemas at handler boundaries (see `app/api/v1/orders/route.ts`). On failure throw `ApiError('BAD_REQUEST', '...', { context: { issues: parsed.error.issues } })`.
 - **Logging**: structured JSON to stdout (`severity`, `msg`, `requestId`, then specific fields) — Cloud Logging parses this. Do not use `console.log` for plain strings in request paths.
 - **Keep demo/live fully separated**. When you add anything tenant-scoped, it must also be mode-scoped; never write a helper that forgets the `mode` parameter.
-- **`deploy.yml` and `infra/provision-m1.sh` must stay in sync** for Cloud Run flags (`--min-instances`, `--vpc-connector`, `--vpc-egress=all-traffic`, SAs, env vars, secrets).
+- **`deploy.yml` and `infra/provision-m1.sh` must stay in sync** for Cloud Run flags (`--min-instances=1`, `--max-instances=1` (load-bearing — see above), `--vpc-connector`, `--vpc-egress=all-traffic`, SAs, env vars, secrets).
 - The root layout (`app/layout.tsx`) is `export const dynamic = 'force-dynamic'` on purpose — it inlines Firebase Web config from Cloud Run env into the HTML. Don't make it static.
 
 ## Useful env vars for local dev

@@ -24,7 +24,10 @@ export const dynamic = 'force-dynamic';
 
 export const POST = withRoute(async (req, { requestId }) => {
   const caller = await requireApiKey(req);
-  const client = await getBtClient(caller.tenant, caller.mode);
+  // Programmatic endpoint (cron + UI button) — never block on the OTP login.
+  // If the session is gone, refresh can't recover it anyway; fail fast with
+  // SESSION_EXPIRED so a human re-auths via the dashboard.
+  const client = await getBtClient(caller.tenant, caller.mode, { interactive: false });
 
   try {
     await client.auth.refresh();
