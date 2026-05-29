@@ -53,11 +53,36 @@ const filter = [RESOURCE_FILTER, `timestamp>="${since}"`, extra]
   .filter(Boolean)
   .join(' AND ');
 
+/**
+ * Resolve credentials. Order:
+ *   1. GCP_SA_KEY — the service-account JSON inline, base64-encoded (preferred
+ *      for headless env-var secret stores: no newline/quote escaping to fight).
+ *      Raw JSON is also accepted if you'd rather paste it verbatim.
+ *   2. Otherwise fall back to ADC (GOOGLE_APPLICATION_CREDENTIALS file path on
+ *      a routine that can mount files, or `gcloud auth application-default
+ *      login` on a laptop).
+ */
+function buildAuth() {
+  const scopes = ['https://www.googleapis.com/auth/logging.read'];
+  const raw = process.env.GCP_SA_KEY?.trim();
+  if (raw) {
+    const json = raw.startsWith('{') ? raw : Buffer.from(raw, 'base64').toString('utf8');
+    let credentials;
+    try {
+      credentials = JSON.parse(json);
+    } catch {
+      throw new Error('GCP_SA_KEY is set but is neither valid JSON nor base64-encoded JSON');
+    }
+    return new GoogleAuth({ scopes, credentials });
+  }
+  return new GoogleAuth({ scopes });
+}
+
 async function main() {
-  const auth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/logging.read'] });
+  const auth = buildAuth();
   const client = await auth.getClient();
   const { token } = await client.getAccessToken();
-  if (!token) throw new Error('no access token — is ADC configured? (GOOGLE_APPLICATION_CREDENTIALS / gcloud auth application-default login)');
+  if (!token) throw new Error('no access token — set GCP_SA_KEY (base64 SA JSON) or configure ADC (GOOGLE_APPLICATION_CREDENTIALS / gcloud auth application-default login)');
 
   const res = await fetch('https://logging.googleapis.com/v2/entries:list', {
     method: 'POST',

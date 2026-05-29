@@ -12,7 +12,9 @@ You are reading the **bt-gateway** Cloud Run service's logs. The whole point of 
 All reads go through `.claude/skills/check-logs/read-logs.mjs`, a Node script that calls the Cloud Logging REST API using `google-auth-library` (a transitive dep already in `node_modules`). There is **no dependency on the `gcloud` binary**, so it works in headless containers that only have Node + the checked-out repo. Authentication is Application Default Credentials:
 
 - **Laptop** → your ADC from `gcloud auth application-default login`.
-- **Routine / Claude on phone** → set `GOOGLE_APPLICATION_CREDENTIALS` to a key for the `bt-gateway-runtime` service account, which holds `roles/logging.viewer` (granted in `infra/provision-m1.sh`).
+- **Routine / Claude on phone** → the `bt-gateway-runtime` service-account key (it holds `roles/logging.viewer`, granted in `infra/provision-m1.sh`), provided one of two ways:
+  - `GCP_SA_KEY` — the key JSON **base64-encoded**, pasted into an env-var secret. Preferred for env-only stores: no newline/quote escaping to fight. Generate with `base64 < bt-gateway-logs-sa.json | tr -d '\n'`. Raw JSON is also accepted if the var starts with `{`.
+  - `GOOGLE_APPLICATION_CREDENTIALS` — a filesystem path, if the environment can mount the key as a file (leave the JSON unmodified).
 
 ## Fixed constants (baked into read-logs.mjs — do not re-parametrize)
 
@@ -30,9 +32,9 @@ The reader always prepends `RESOURCE_FILTER` and a `timestamp>=` bound from `--f
    ```bash
    node -e "require.resolve('google-auth-library')" 2>/dev/null || npm install
    ```
-2. If a read fails with "no access token" / a 401/403 from the Logging API, ADC isn't configured for this environment. Tell the user exactly which fix applies:
+2. If a read fails with "no access token" / a 401/403 from the Logging API, credentials aren't configured for this environment. Tell the user exactly which fix applies:
    - laptop → `gcloud auth application-default login`
-   - routine / phone → set `GOOGLE_APPLICATION_CREDENTIALS` to the runtime-SA key in the environment's secrets/env settings.
+   - routine / phone → set `GCP_SA_KEY` (base64 of the runtime-SA key JSON) in the environment's secrets, or `GOOGLE_APPLICATION_CREDENTIALS` to a mounted key file.
    Do not fail silently and do not try to switch credentials yourself.
 
 ## The structured-log schema this service emits
