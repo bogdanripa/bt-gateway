@@ -6,6 +6,10 @@
 .env.local
 .env.*.local
 service-account-*.json
+# GCP service-account keys (e.g. the /check-logs runtime-SA key)
+*-sa.json
+*-logs-sa.json
+bt-gateway-logs-sa.json
 
 # Node
 node_modules/
