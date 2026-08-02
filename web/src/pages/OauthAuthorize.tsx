@@ -1,5 +1,5 @@
 /**
- * OAuth authorize endpoint as a Next.js page.
+ * OAuth authorize endpoint as a page rather than an API route.
  *
  * Why a page instead of a route handler:
  *   - The user must be Firebase-signed-in to consent. The existing AuthGate
@@ -40,7 +40,15 @@ interface OauthContext {
 }
 
 function AuthorizeBody() {
-  const sp = useSearchParams();
+  // Destructure — react-router's useSearchParams returns [params, setParams].
+  // Holding the whole tuple broke this page twice over: `sp.toString()` was
+  // Array.prototype.toString, which appended the setter's source text to the
+  // last query param, and the tuple is a fresh array each render, so the
+  // effect below re-fired on *every* state change and reset `mode` back to
+  // demo the moment you clicked live. `qs` is a string, so it compares by
+  // value and the fetch happens once.
+  const [sp] = useSearchParams();
+  const qs = sp.toString();
   const [ctx, setCtx] = useState<OauthContext | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
 
@@ -52,7 +60,6 @@ function AuthorizeBody() {
 
   useEffect(() => {
     let cancelled = false;
-    const qs = sp.toString();
     uiFetch<OauthContext>(`/api/ui/oauth/context?${qs}`)
       .then((data) => {
         if (cancelled) return;
@@ -66,7 +73,7 @@ function AuthorizeBody() {
         setLoadErr((e as Error).message);
       });
     return () => { cancelled = true; };
-  }, [sp]);
+  }, [qs]);
 
   async function onApprove() {
     if (!ctx || !mode) return;
