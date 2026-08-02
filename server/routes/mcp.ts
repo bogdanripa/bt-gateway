@@ -21,7 +21,7 @@
  * sees the raw payload it would have received from REST.
  */
 
-import { ApiError, json } from '@/lib/errors';
+import { ApiError, json, newRequestId } from '@/lib/errors';
 import {
   authenticateApiKey,
   extractApiKey,
@@ -70,13 +70,19 @@ function rpcResult(id: JsonRpcId, result: unknown): Response {
   return json({ jsonrpc: '2.0', id: id ?? null, result });
 }
 
-function rpcError(id: JsonRpcId, code: number, message: string, data?: unknown): Response {
+function rpcError(
+  id: JsonRpcId,
+  code: number,
+  message: string,
+  data?: unknown,
+  status?: number,
+): Response {
   const body: Record<string, unknown> = {
     jsonrpc: '2.0',
     id: id ?? null,
     error: { code, message, ...(data !== undefined ? { data } : {}) },
   };
-  return json(body);
+  return json(body, status !== undefined ? { status } : {});
 }
 
 function toolErrorContent(text: string, code?: string): unknown {
@@ -196,7 +202,18 @@ async function handleToolCall(
   return rpcResult(msg.id ?? null, toolOkContent(parsed ?? text));
 }
 
-async function handle(req: Request): Promise<Response> {
+/**
+ * Mutable slot `dispatch` fills in once it has parsed the JSON-RPC envelope,
+ * so the wrapper below can name the method in its log line and echo the id
+ * back on an error. Parsing stays *after* authentication — an unauthenticated
+ * caller must not get a parse-error reply that a challenge would not give.
+ */
+interface RpcContext {
+  rpcMethod?: string;
+  id: JsonRpcId;
+}
+
+async function dispatch(req: Request, ctx: RpcContext): Promise<Response> {
   if (req.method !== 'POST') {
     // GET (SSE) is not implemented. Reply with a JSON-RPC-shaped error so
     // an MCP client surfaces something readable instead of HTML.
@@ -232,6 +249,8 @@ async function handle(req: Request): Promise<Response> {
   if (!msg || typeof msg !== 'object') {
     return rpcError(null, -32600, 'Invalid Request');
   }
+  ctx.id = msg.id ?? null;
+  if (typeof msg.method === 'string') ctx.rpcMethod = msg.method;
   if (typeof msg.method !== 'string') {
     return rpcError(msg.id ?? null, -32600, 'Invalid Request: method missing');
   }
@@ -258,6 +277,85 @@ async function handle(req: Request): Promise<Response> {
       return rpcResult(msg.id ?? null, { resources: [] });
     default:
       return rpcError(msg.id ?? null, -32601, `Method not found: ${msg.method}`);
+  }
+}
+
+/**
+ * Error boundary + access logging for `/mcp`.
+ *
+ * This route cannot use `withRoute`: that emits the REST envelope
+ * `{ error: { code, message, requestId } }`, which an MCP client cannot
+ * parse — it expects JSON-RPC. So the same two log lines (`route.error`,
+ * `route.access`) are emitted here by hand, deliberately matching
+ * withRoute's field names so `/check-logs` and every requestId grep work
+ * on `/mcp` exactly as they do on the REST routes. Before this existed,
+ * `/mcp` was the one route invisible to the access log, and a failure
+ * surfaced only as a bare `server.unhandled` from the HTTP bridge.
+ *
+ * On what can actually land here: `dispatch` converts every expected
+ * failure — bad arguments, unknown method, upstream/BT errors, auth — into
+ * a 200 or a 401 challenge. The one rethrow is a non-`ApiError` escaping
+ * `authenticateApiKey`, and since that helper only ever throws
+ * UNAUTHORIZED/RATE_LIMITED itself, in practice that means the database
+ * read threw: a cold-start pool reconnect, or Postgres genuinely down.
+ *
+ * That is transient, so it answers 503 (not 500) with JSON-RPC -32603, to
+ * tell the client to retry rather than treat the session as broken. The
+ * raw message never reaches the caller — only the requestId, which ties
+ * the reply to the logged stack.
+ */
+async function handle(req: Request): Promise<Response> {
+  const requestId = newRequestId();
+  const ctx: RpcContext = { id: null };
+  const start = Date.now();
+  let status = 500;
+  let errCode: string | undefined;
+
+  try {
+    const res = await dispatch(req, ctx);
+    status = res.status;
+    res.headers.set('x-request-id', requestId);
+    return res;
+  } catch (e) {
+    status = e instanceof ApiError ? e.status : 503;
+    errCode = e instanceof ApiError ? e.code : 'INTERNAL';
+    console.error(
+      JSON.stringify({
+        severity: 'ERROR',
+        msg: 'route.error',
+        requestId,
+        path: '/mcp',
+        method: req.method,
+        rpcMethod: ctx.rpcMethod,
+        code: errCode,
+        message: (e as Error)?.message,
+        context: e instanceof ApiError ? e.context : undefined,
+        stack: e instanceof Error && !(e instanceof ApiError) ? e.stack : undefined,
+      }),
+    );
+    const res = rpcError(
+      ctx.id,
+      -32603,
+      'Internal error — the gateway could not serve this request. Retry shortly.',
+      { requestId },
+      status,
+    );
+    res.headers.set('x-request-id', requestId);
+    return res;
+  } finally {
+    console.log(
+      JSON.stringify({
+        severity: status >= 500 ? 'ERROR' : 'INFO',
+        msg: 'route.access',
+        requestId,
+        path: '/mcp',
+        method: req.method,
+        rpcMethod: ctx.rpcMethod,
+        status,
+        code: errCode,
+        latencyMs: Date.now() - start,
+      }),
+    );
   }
 }
 

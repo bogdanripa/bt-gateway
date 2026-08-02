@@ -3808,13 +3808,13 @@ function challenge(req, description) {
 function rpcResult(id, result) {
   return json({ jsonrpc: "2.0", id: id ?? null, result });
 }
-function rpcError(id, code, message, data) {
+function rpcError(id, code, message, data, status) {
   const body = {
     jsonrpc: "2.0",
     id: id ?? null,
     error: { code, message, ...data !== void 0 ? { data } : {} }
   };
-  return json(body);
+  return json(body, status !== void 0 ? { status } : {});
 }
 function toolErrorContent(text, code) {
   return {
@@ -3914,7 +3914,7 @@ async function handleToolCall(msg, caller, req, bearer) {
   }
   return rpcResult(msg.id ?? null, toolOkContent(parsed ?? text));
 }
-async function handle(req) {
+async function dispatch(req, ctx) {
   if (req.method !== "POST") {
     return new Response(
       JSON.stringify({
@@ -3945,6 +3945,8 @@ async function handle(req) {
   if (!msg || typeof msg !== "object") {
     return rpcError(null, -32600, "Invalid Request");
   }
+  ctx.id = msg.id ?? null;
+  if (typeof msg.method === "string") ctx.rpcMethod = msg.method;
   if (typeof msg.method !== "string") {
     return rpcError(msg.id ?? null, -32600, "Invalid Request: method missing");
   }
@@ -3966,6 +3968,59 @@ async function handle(req) {
       return rpcResult(msg.id ?? null, { resources: [] });
     default:
       return rpcError(msg.id ?? null, -32601, `Method not found: ${msg.method}`);
+  }
+}
+async function handle(req) {
+  const requestId = newRequestId();
+  const ctx = { id: null };
+  const start = Date.now();
+  let status = 500;
+  let errCode;
+  try {
+    const res = await dispatch(req, ctx);
+    status = res.status;
+    res.headers.set("x-request-id", requestId);
+    return res;
+  } catch (e) {
+    status = e instanceof ApiError ? e.status : 503;
+    errCode = e instanceof ApiError ? e.code : "INTERNAL";
+    console.error(
+      JSON.stringify({
+        severity: "ERROR",
+        msg: "route.error",
+        requestId,
+        path: "/mcp",
+        method: req.method,
+        rpcMethod: ctx.rpcMethod,
+        code: errCode,
+        message: e?.message,
+        context: e instanceof ApiError ? e.context : void 0,
+        stack: e instanceof Error && !(e instanceof ApiError) ? e.stack : void 0
+      })
+    );
+    const res = rpcError(
+      ctx.id,
+      -32603,
+      "Internal error \u2014 the gateway could not serve this request. Retry shortly.",
+      { requestId },
+      status
+    );
+    res.headers.set("x-request-id", requestId);
+    return res;
+  } finally {
+    console.log(
+      JSON.stringify({
+        severity: status >= 500 ? "ERROR" : "INFO",
+        msg: "route.access",
+        requestId,
+        path: "/mcp",
+        method: req.method,
+        rpcMethod: ctx.rpcMethod,
+        status,
+        code: errCode,
+        latencyMs: Date.now() - start
+      })
+    );
   }
 }
 var GET28 = handle;
