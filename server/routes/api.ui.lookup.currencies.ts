@@ -6,7 +6,7 @@
  */
 
 import { requireFirebaseUser } from '@/lib/auth/session';
-import { getBtClient } from '@/lib/bt/client-pool';
+import { runWithSession, toBtApiError } from '@/lib/bt/client-pool';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
 import type { BtMode } from '@/lib/store';
@@ -49,11 +49,21 @@ export const GET = withRoute(async (req) => {
     throw new ApiError('BAD_REQUEST', 'mode query param must be "demo" or "live"');
   }
   const mode = modeRaw as BtMode;
-  const client = await getBtClient(caller.tenant, mode);
+
+  // runWithSession (not a bare getBtClient) so a stale pool entry retries once
+  // against a rebuilt client instead of 502-ing. `interactive: false` because
+  // this feeds an autocomplete: hanging the filter editor for up to 5 minutes
+  // on an SMS OTP is worse than a fast 503 the UI can render as "re-auth".
+  // The dashboard's /api/ui/account is the interactive path that drives login.
   try {
-    const currencies = await client.reference.listCurrencies();
+    const currencies = await runWithSession(
+      caller.tenant,
+      mode,
+      (client) => client.reference.listCurrencies(),
+      { interactive: false },
+    );
     return ok({ mode, currencies: reshape(currencies) });
   } catch (e) {
-    throw new ApiError('UPSTREAM_UNAVAILABLE', `listCurrencies failed: ${(e as Error).message}`);
+    throw toBtApiError(e, 'listCurrencies', caller.tenant, mode);
   }
 });

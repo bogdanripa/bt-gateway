@@ -7,7 +7,7 @@
  */
 
 import { requireFirebaseUser } from '@/lib/auth/session';
-import { getBtClient } from '@/lib/bt/client-pool';
+import { runWithSession, toBtApiError } from '@/lib/bt/client-pool';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
 import type { BtMode } from '@/lib/store';
@@ -53,11 +53,16 @@ export const GET = withRoute(async (req) => {
   const q = (new URL(req.url).searchParams.get('q') ?? '').trim();
   if (!q) return ok({ mode, instruments: [] });
 
-  const client = await getBtClient(caller.tenant, mode);
+  // See api.ui.lookup.currencies.ts for why this is non-interactive.
   try {
-    const hits = await client.markets.searchInstrument(q);
+    const hits = await runWithSession(
+      caller.tenant,
+      mode,
+      (client) => client.markets.searchInstrument(q),
+      { interactive: false },
+    );
     return ok({ mode, instruments: reshape(hits) });
   } catch (e) {
-    throw new ApiError('UPSTREAM_UNAVAILABLE', `searchInstrument failed: ${(e as Error).message}`);
+    throw toBtApiError(e, 'searchInstrument', caller.tenant, mode);
   }
 });

@@ -1400,6 +1400,13 @@ function sessionExpiredError(t, mode, stage) {
   const message = stage === "login-in-progress" ? `BT ${mode} sign-in already in progress \u2014 retry shortly` : `BT ${mode} session expired \u2014 sign in to restore live data`;
   return new ApiError("SESSION_EXPIRED", message, { context: { uid: t.uid, mode, stage } });
 }
+function toBtApiError(e, label, t, mode) {
+  if (e instanceof ApiError) return e;
+  if (isSessionExpired(e)) return sessionExpiredError(t, mode, "refresh-failed");
+  return new ApiError("UPSTREAM_UNAVAILABLE", `${label} failed: ${e.message}`, {
+    context: { uid: t.uid, mode, label }
+  });
+}
 async function buildClient(t, mode, interactive) {
   const creds = await getBtCreds(t, mode);
   if (!creds) {
@@ -2454,12 +2461,16 @@ var GET8 = withRoute(async (req) => {
     throw new ApiError("BAD_REQUEST", 'mode query param must be "demo" or "live"');
   }
   const mode = modeRaw;
-  const client = await getBtClient(caller.tenant, mode);
   try {
-    const currencies = await client.reference.listCurrencies();
+    const currencies = await runWithSession(
+      caller.tenant,
+      mode,
+      (client) => client.reference.listCurrencies(),
+      { interactive: false }
+    );
     return ok({ mode, currencies: reshape(currencies) });
   } catch (e) {
-    throw new ApiError("UPSTREAM_UNAVAILABLE", `listCurrencies failed: ${e.message}`);
+    throw toBtApiError(e, "listCurrencies", caller.tenant, mode);
   }
 });
 
@@ -2496,12 +2507,16 @@ var GET9 = withRoute(async (req) => {
   const mode = modeRaw;
   const q2 = (new URL(req.url).searchParams.get("q") ?? "").trim();
   if (!q2) return ok({ mode, instruments: [] });
-  const client = await getBtClient(caller.tenant, mode);
   try {
-    const hits = await client.markets.searchInstrument(q2);
+    const hits = await runWithSession(
+      caller.tenant,
+      mode,
+      (client) => client.markets.searchInstrument(q2),
+      { interactive: false }
+    );
     return ok({ mode, instruments: reshape2(hits) });
   } catch (e) {
-    throw new ApiError("UPSTREAM_UNAVAILABLE", `searchInstrument failed: ${e.message}`);
+    throw toBtApiError(e, "searchInstrument", caller.tenant, mode);
   }
 });
 
@@ -2514,13 +2529,17 @@ var GET10 = withRoute(async (req) => {
   }
   const mode = modeRaw;
   const q2 = (new URL(req.url).searchParams.get("q") ?? "").trim().toLowerCase();
-  const client = await getBtClient(caller.tenant, mode);
   try {
-    const { options } = await getMarkets(caller.tenant, mode, client);
+    const { options } = await runWithSession(
+      caller.tenant,
+      mode,
+      (client) => getMarkets(caller.tenant, mode, client),
+      { interactive: false }
+    );
     const markets = q2 ? options.filter((m) => m.code.toLowerCase().includes(q2) || m.label.toLowerCase().includes(q2)) : options;
     return ok({ mode, markets });
   } catch (e) {
-    throw new ApiError("UPSTREAM_UNAVAILABLE", `markets.list failed: ${e.message}`);
+    throw toBtApiError(e, "markets.list", caller.tenant, mode);
   }
 });
 

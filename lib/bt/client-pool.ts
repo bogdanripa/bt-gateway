@@ -101,6 +101,31 @@ function sessionExpiredError(t: TenantRef, mode: BtMode, stage: string): ApiErro
   return new ApiError('SESSION_EXPIRED', message, { context: { uid: t.uid, mode, stage } });
 }
 
+/**
+ * Classify an error raised by a BT call into the canonical ApiError.
+ *
+ * Route handlers that wrap a BT call in their own try/catch must funnel the
+ * error through here rather than blanket-wrapping it in UPSTREAM_UNAVAILABLE:
+ * a dead session is a 503 `SESSION_EXPIRED` ("re-auth"), not a 502 ("BT is
+ * broken"), and a caller can only tell them apart if the code is right.
+ *
+ * Existing `ApiError`s pass through untouched — they were already classified
+ * (e.g. the `login-required` 503 `buildClient` throws on the non-interactive
+ * path, or the `no-creds` 502).
+ */
+export function toBtApiError(
+  e: unknown,
+  label: string,
+  t: TenantRef,
+  mode: BtMode,
+): ApiError {
+  if (e instanceof ApiError) return e;
+  if (isSessionExpired(e)) return sessionExpiredError(t, mode, 'refresh-failed');
+  return new ApiError('UPSTREAM_UNAVAILABLE', `${label} failed: ${(e as Error).message}`, {
+    context: { uid: t.uid, mode, label },
+  });
+}
+
 async function buildClient(
   t: TenantRef,
   mode: BtMode,

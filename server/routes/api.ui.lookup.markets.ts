@@ -11,7 +11,7 @@
  */
 
 import { requireFirebaseUser } from '@/lib/auth/session';
-import { getBtClient } from '@/lib/bt/client-pool';
+import { runWithSession, toBtApiError } from '@/lib/bt/client-pool';
 import { getMarkets } from '@/lib/bt/markets-cache';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
@@ -27,14 +27,19 @@ export const GET = withRoute(async (req) => {
   const mode = modeRaw as BtMode;
   const q = (new URL(req.url).searchParams.get('q') ?? '').trim().toLowerCase();
 
-  const client = await getBtClient(caller.tenant, mode);
+  // See api.ui.lookup.currencies.ts for why this is non-interactive.
   try {
-    const { options } = await getMarkets(caller.tenant, mode, client);
+    const { options } = await runWithSession(
+      caller.tenant,
+      mode,
+      (client) => getMarkets(caller.tenant, mode, client),
+      { interactive: false },
+    );
     const markets = q
       ? options.filter((m) => m.code.toLowerCase().includes(q) || m.label.toLowerCase().includes(q))
       : options;
     return ok({ mode, markets });
   } catch (e) {
-    throw new ApiError('UPSTREAM_UNAVAILABLE', `markets.list failed: ${(e as Error).message}`);
+    throw toBtApiError(e, 'markets.list', caller.tenant, mode);
   }
 });
