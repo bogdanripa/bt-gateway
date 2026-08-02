@@ -11,7 +11,7 @@
  */
 
 import 'server-only';
-import { appendEvent, type EventDoc, type TenantRef } from './firestore';
+import { appendEvent, type EventDoc, type TenantRef } from './store';
 
 type AppendArgs = {
   tenant: TenantRef;

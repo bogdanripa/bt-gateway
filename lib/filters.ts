@@ -27,7 +27,7 @@
 
 import 'server-only';
 import { ApiError } from './errors';
-import type { ApiKeyFilters, FilterAxis } from './firestore';
+import type { ApiKeyFilters, FilterAxis } from './store';
 
 export type FilterAxisName = 'markets' | 'currencies' | 'stocks';
 

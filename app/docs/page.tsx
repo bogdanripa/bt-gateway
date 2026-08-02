@@ -89,7 +89,7 @@ const faqLd = {
       acceptedAnswer: {
         '@type': 'Answer',
         text:
-          'On Google Cloud, in region europe-west3. BT credentials and Telegram bot tokens are encrypted with Google Cloud KMS. API keys are stored as one-way hashes &mdash; the raw key is shown exactly once at creation.',
+          'On a dedicated self-hosted server, in a private database that is not reachable from the public internet. BT credentials and Telegram bot tokens are encrypted with AES-256-GCM envelope encryption. API keys are stored as one-way hashes &mdash; the raw key is shown exactly once at creation.',
       },
     },
   ],
@@ -199,7 +199,7 @@ export default function DocsPage() {
         <section aria-labelledby="security">
           <h2 id="security">Security model</h2>
           <ul>
-            <li>Your BT credentials and Telegram bot token are encrypted at rest with Google Cloud KMS.</li>
+            <li>Your BT credentials and Telegram bot token are encrypted at rest with AES-256-GCM envelope encryption.</li>
             <li>API keys are stored as one-way hashes &mdash; the raw key is shown exactly once at creation.</li>
             <li>Every order, sign-in, and credential change shows up in your own audit log.</li>
             <li>Live and demo are fully isolated &mdash; separate credentials, separate keys, separate connections. A demo key cannot touch live money, by construction.</li>

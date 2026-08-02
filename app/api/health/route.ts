@@ -1,14 +1,18 @@
 /**
  * GET /api/health
  *
- * Liveness + egress-IP probe. The `egressIp` field is critical for M1: it
- * confirms the Cloud Run service is actually leaving GCP via our reserved
- * static external IP (Cloud NAT), not via Google's shared egress pool. BT
- * Trade pins refresh tokens to the originating IP, so without a stable
- * egress the whole gateway premise falls apart.
+ * Liveness + egress-IP probe. This is also the app's configured health_path,
+ * so the container healthcheck and the deploy's "wait for healthy" step both
+ * request it — it must stay unauthenticated and must not depend on the
+ * database, or a transient Postgres blip turns into a rolled-back deploy.
  *
- * On M1 exit we hit this endpoint 20× in a row and expect the same IP every
- * time. If it rotates, the VPC / NAT wiring is wrong.
+ * The `egressIp` field remains the single most useful diagnostic here. BT
+ * Trade pins refresh tokens to the IP that issued them, so a change in this
+ * value is the direct cause of a fleet-wide `IP diferit`. On Cloud Run it
+ * confirmed traffic was leaving through the reserved static NAT address;
+ * on the Pi it reports the home broadband IP, which is stable in practice
+ * but is not contractually static. If sessions start dying en masse, hit
+ * this first and compare the IP against what it was.
  *
  * Intentionally unauthenticated. Returns no tenant-sensitive data.
  */

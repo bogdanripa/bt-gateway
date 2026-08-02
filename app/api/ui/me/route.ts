@@ -7,7 +7,7 @@
  */
 
 import { requireFirebaseUser } from '@/lib/auth/session';
-import { getUser, upsertUser } from '@/lib/firestore';
+import { getUser, upsertUser } from '@/lib/store';
 import { ok, withRoute } from '@/lib/route-handler';
 
 export const runtime = 'nodejs';

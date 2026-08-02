@@ -17,7 +17,7 @@
 import 'server-only';
 import { ApiError } from '../errors';
 import type { BTTradeClient } from '@bogdanripa/bt-trade';
-import type { BtMode, TenantRef } from '../firestore';
+import type { BtMode, TenantRef } from '../store';
 
 const cache = new Map<string, string>();
 

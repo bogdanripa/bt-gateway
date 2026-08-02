@@ -16,10 +16,11 @@ import { requireFirebaseUser } from '@/lib/auth/session';
 import {
   getBtCreds,
   setBtCreds,
+  deleteBtCreds,
   deleteBtSession,
   type BtMode,
-} from '@/lib/firestore';
-import { encrypt, decrypt } from '@/lib/kms';
+} from '@/lib/store';
+import { encrypt, decrypt } from '@/lib/secret-box';
 import { ApiError } from '@/lib/errors';
 import { audit } from '@/lib/events';
 import { ok, withRoute } from '@/lib/route-handler';
@@ -114,12 +115,8 @@ export const PUT = withRoute<{ mode: string }>(async (req, { params, requestId }
 export const DELETE = withRoute<{ mode: string }>(async (req, { params, requestId }) => {
   const caller = await requireFirebaseUser(req);
   const mode = parseMode(params.mode);
-  // Delete creds, session, and evict clients. We use a direct Firestore
-  // delete via the collection helper to avoid churning the shape.
-  const { getFirestore } = await import('firebase-admin/firestore');
-  const { adminApp } = await import('@/lib/firebase/admin');
-  const db = getFirestore(adminApp());
-  await db.doc(`users/${caller.tenant.uid}/bt_creds/${mode}`).delete().catch(() => { /* already gone */ });
+  // Delete creds, session, and evict clients.
+  await deleteBtCreds(caller.tenant, mode).catch(() => { /* already gone */ });
   await deleteBtSession(caller.tenant, mode).catch(() => { /* best-effort */ });
   evictBtClient(caller.tenant, mode);
   evictPortfolioKey(caller.tenant, mode);

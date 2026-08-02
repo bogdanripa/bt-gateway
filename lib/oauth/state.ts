@@ -79,10 +79,14 @@ export function isValidRedirectUri(raw: string): boolean {
 }
 
 /**
- * Resolve the canonical base URL this service answers on. Cloud Run sets
- * X-Forwarded-Host to the public hostname; locally we fall back to the
- * request URL. An explicit `BT_GATEWAY_PUBLIC_URL` env override beats both
- * — useful when a custom domain is fronting Cloud Run.
+ * Resolve the canonical base URL this service answers on. The edge proxy in
+ * front of the container sets X-Forwarded-Host to the public hostname;
+ * locally we fall back to the request URL.
+ *
+ * Set `BT_GATEWAY_PUBLIC_URL` in production and it beats both. That is the
+ * recommended configuration, not just an escape hatch: this value ends up in
+ * OAuth metadata and redirect URIs, where being silently wrong because a
+ * proxy header changed shape is a bad failure mode.
  */
 export function publicBaseUrl(req: Request): string {
   const configured = process.env.BT_GATEWAY_PUBLIC_URL?.replace(/\/+$/, '');

@@ -7,7 +7,7 @@
  */
 
 import { requireFirebaseUser } from '@/lib/auth/session';
-import { getTelegramLink, clearTelegramLink } from '@/lib/firestore';
+import { getTelegramLink, clearTelegramLink } from '@/lib/store';
 import { audit } from '@/lib/events';
 import { ok, withRoute } from '@/lib/route-handler';
 

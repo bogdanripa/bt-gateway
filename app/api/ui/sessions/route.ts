@@ -7,14 +7,14 @@
  *   - when the refresh token expires (long-lived, ~hours/days)
  *   - the most recent cash + holdings snapshot written by bt_executor status
  *
- * This route does NOT touch BT Trade — it only reads Firestore. Nothing here
+ * This route does NOT touch BT Trade — it only reads the database. Nothing here
  * is auditable; it's a pure read of our own cached state. Tokens themselves
  * are never returned, only their expiry metadata.
  */
 
 import { requireFirebaseUser } from '@/lib/auth/session';
 import { ok, withRoute } from '@/lib/route-handler';
-import { getBtSession, getPortfolioState, type BtMode } from '@/lib/firestore';
+import { getBtSession, getPortfolioState, type BtMode } from '@/lib/store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';

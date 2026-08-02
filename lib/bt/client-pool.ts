@@ -38,7 +38,7 @@ import {
 } from '@bogdanripa/bt-trade';
 import { instrumentRefresh, isSessionExpired } from './session-internals';
 import { ApiError } from '../errors';
-import { decrypt } from '../kms';
+import { decrypt } from '../secret-box';
 import { audit } from '../events';
 import { notifyTenant } from '../telegram';
 import {
@@ -48,7 +48,7 @@ import {
   deleteBtSession,
   type BtMode,
   type TenantRef,
-} from '../firestore';
+} from '../store';
 
 /**
  * Tenants with a `login()` currently in flight. Guarantees at most ONE BT

@@ -10,7 +10,7 @@
  */
 
 import { requireApiKey, assertWriteAccess } from '@/lib/auth/api-key';
-import { getPortfolioState, setPortfolioState } from '@/lib/firestore';
+import { getPortfolioState, setPortfolioState } from '@/lib/store';
 import { ok, readJsonObject, withRoute } from '@/lib/route-handler';
 
 export const runtime = 'nodejs';

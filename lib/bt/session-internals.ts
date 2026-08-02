@@ -9,7 +9,7 @@
 
 import 'server-only';
 import { AuthError, type BTTradeClient } from '@bogdanripa/bt-trade';
-import type { BtMode } from '../firestore';
+import type { BtMode } from '../store';
 
 /**
  * Detect the "session is toast" family of errors bt-trade raises when it

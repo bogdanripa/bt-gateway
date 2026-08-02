@@ -22,7 +22,7 @@
  */
 
 import { requireFirebaseUser } from '@/lib/auth/session';
-import { getBtCreds, getOauthClient, listApiKeys } from '@/lib/firestore';
+import { getBtCreds, getOauthClient, listApiKeys } from '@/lib/store';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
 

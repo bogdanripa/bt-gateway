@@ -19,7 +19,7 @@
  *     errors?: [{ currency: string, message }]    // only present on partial failures
  *   }
  *
- * Read-only — does NOT emit an audit event. Cloud Logging captures the
+ * Read-only — does NOT emit an audit event. The container logs capture the
  * access log via `withRoute`.
  */
 

@@ -12,7 +12,7 @@
  *
  * We validate redirect_uris against an allowlist (HTTPS, or localhost for
  * desktop apps), generate a random `client_id`, and persist a tiny
- * `OauthClientDoc` at the root of Firestore. No `client_secret` is issued —
+ * `OauthClientDoc` in the global `oauth_clients` table. No `client_secret` is issued —
  * security comes from PKCE + the redirect_uri match, not a shared secret.
  *
  * Unauthenticated by design: anyone can register a client. We assume the
@@ -22,7 +22,7 @@
 
 import { NextResponse } from 'next/server';
 import { ApiError } from '@/lib/errors';
-import { createOauthClient } from '@/lib/firestore';
+import { createOauthClient } from '@/lib/store';
 import { isValidRedirectUri, randomId } from '@/lib/oauth/state';
 
 export const runtime = 'nodejs';

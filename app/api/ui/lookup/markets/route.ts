@@ -15,7 +15,7 @@ import { getBtClient } from '@/lib/bt/client-pool';
 import { getMarkets } from '@/lib/bt/markets-cache';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError } from '@/lib/errors';
-import type { BtMode } from '@/lib/firestore';
+import type { BtMode } from '@/lib/store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';

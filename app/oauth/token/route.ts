@@ -31,7 +31,7 @@ import {
   getOauthClient,
   revokeApiKey,
   tenantFromAuthedUid,
-} from '@/lib/firestore';
+} from '@/lib/store';
 import { generateApiKey } from '@/lib/auth/api-key';
 import { hashCode, verifyPkceS256 } from '@/lib/oauth/state';
 

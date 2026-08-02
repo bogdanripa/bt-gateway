@@ -9,7 +9,7 @@
  */
 
 import { requireApiKey } from '@/lib/auth/api-key';
-import { listMarketSnapshots } from '@/lib/firestore';
+import { listMarketSnapshots } from '@/lib/store';
 import { ok, withRoute } from '@/lib/route-handler';
 
 export const runtime = 'nodejs';

@@ -2,7 +2,7 @@
   "name": "bt-gateway",
   "version": "0.0.0",
   "private": true,
-  "description": "Multi-tenant BT Trade HTTP gateway + web UI. Runs on Cloud Run with a static egress IP so refresh tokens survive across invocations.",
+  "description": "Multi-tenant BT Trade HTTP gateway + web UI. Runs as a single always-warm container on the Pi, backed by Postgres.",
   "engines": {
     "node": ">=20.0.0"
   },
@@ -15,17 +15,17 @@
   },
   "dependencies": {
     "@bogdanripa/bt-trade": "^0.3.1",
-    "@google-cloud/firestore": "^7.11.0",
-    "@google-cloud/kms": "^4.5.0",
     "firebase": "^10.14.1",
     "firebase-admin": "^12.6.0",
     "next": "^15.0.3",
+    "pg": "^8.22.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^22.8.6",
+    "@types/pg": "^8.20.3",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "eslint": "^9.14.0",

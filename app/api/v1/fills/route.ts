@@ -8,7 +8,7 @@
  */
 
 import { requireApiKey, assertWriteAccess } from '@/lib/auth/api-key';
-import { appendFillRecord, listFillRecords } from '@/lib/firestore';
+import { appendFillRecord, listFillRecords } from '@/lib/store';
 import { ok, readJsonObject, withRoute } from '@/lib/route-handler';
 import { assertAllowed, filterRecords, readRecordFields } from '@/lib/filters';
 

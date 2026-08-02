@@ -213,7 +213,8 @@ export default function LandingPage() {
             <div className="card">
               <h3>Solid security defaults</h3>
               <p className="dim">
-                Your BT credentials are encrypted at rest with Google Cloud KMS. API keys
+                Your BT credentials are encrypted at rest with AES-256-GCM envelope
+                encryption. API keys
                 are stored hashed (we never see the raw value after creation). Every order
                 placed on your behalf shows up in your own audit log &mdash; and
                 optionally on your own Telegram bot.

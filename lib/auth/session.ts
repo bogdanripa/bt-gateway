@@ -14,7 +14,7 @@ import 'server-only';
 import type { NextRequest } from 'next/server';
 import { ApiError } from '../errors';
 import { adminAuth } from '../firebase/admin';
-import { tenantFromAuthedUid, type TenantRef } from '../firestore';
+import { tenantFromAuthedUid, type TenantRef } from '../store';
 
 export interface UiCaller {
   tenant: TenantRef;

@@ -10,7 +10,7 @@
  *   webhookSecret == <secret>
  *
  * No match → respond 200 silently (don't leak existence of valid secrets,
- * don't fan out into Cloud Logging errors when someone pokes a stale URL).
+ * don't fan out into logged errors when someone pokes a stale URL).
  *
  * Handles `/start <linkCode>`. The UI generates a short-lived code
  * (users/{uid}/integrations/telegram_pending). After resolving the uid
@@ -30,9 +30,9 @@ import {
   setTelegramLink,
   tenantFromAuthedUid,
   PENDING_TELEGRAM_LINK_TTL_MS,
-} from '@/lib/firestore';
+} from '@/lib/store';
 import { audit } from '@/lib/events';
-import { decrypt } from '@/lib/kms';
+import { decrypt } from '@/lib/secret-box';
 import { sendMessageWithToken } from '@/lib/telegram-bot';
 
 export const runtime = 'nodejs';
@@ -66,7 +66,7 @@ export const POST = withRoute<{ secret: string }>(async (req, { params, requestI
     return okAck();
   }
 
-  // Look up the bot by its webhook secret. If the Firestore query itself
+  // Look up the bot by its webhook secret. If the lookup itself
   // fails (e.g. missing index, permissions), log loudly — a silent swallow
   // here makes a broken webhook look identical to a stale URL.
   let bot: Awaited<ReturnType<typeof findTelegramBotByWebhookSecret>>;

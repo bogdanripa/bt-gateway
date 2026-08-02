@@ -14,7 +14,7 @@
 import crypto from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { audit } from '@/lib/events';
-import { revokeApiKey, tenantFromAuthedUid } from '@/lib/firestore';
+import { findApiKeyByHash, revokeApiKey, tenantFromAuthedUid } from '@/lib/store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -49,32 +49,18 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (raw) {
     try {
       const hash = crypto.createHash('sha256').update(raw).digest('hex');
-      const { getFirestore } = await import('firebase-admin/firestore');
-      const { adminApp } = await import('@/lib/firebase/admin');
-      const db = getFirestore(adminApp());
-      const snap = await db
-        .collectionGroup('api_keys')
-        .where('hash', '==', hash)
-        .limit(1)
-        .get();
-      if (!snap.empty) {
-        const doc = snap.docs[0];
-        const data = doc.data() as { revokedAt?: string; mode?: 'demo' | 'live'; mcpClientId?: string };
-        if (!data.revokedAt) {
-          const parts = doc.ref.path.split('/');
-          const uid = parts[1];
-          const kid = doc.id;
-          const tenant = tenantFromAuthedUid(uid);
-          await revokeApiKey(tenant, kid);
-          await audit({
-            tenant,
-            type: data.mcpClientId ? 'mcp.revoked' : 'apikey.revoked',
-            actor: 'mcp_client',
-            mode: data.mode,
-            status: 'ok',
-            detail: { keyId: kid, via: 'oauth/revoke' },
-          });
-        }
+      const found = await findApiKeyByHash(hash);
+      if (found && !found.revokedAt) {
+        const tenant = tenantFromAuthedUid(found.uid);
+        await revokeApiKey(tenant, found.id);
+        await audit({
+          tenant,
+          type: found.mcpClientId ? 'mcp.revoked' : 'apikey.revoked',
+          actor: 'mcp_client',
+          mode: found.mode,
+          status: 'ok',
+          detail: { keyId: found.id, via: 'oauth/revoke' },
+        });
       }
     } catch (e) {
       // Never leak details — still return 200.

@@ -13,7 +13,7 @@
 
 import crypto from 'node:crypto';
 import { requireFirebaseUser } from '@/lib/auth/session';
-import { getTelegramBot, setPendingTelegramLink } from '@/lib/firestore';
+import { getTelegramBot, setPendingTelegramLink } from '@/lib/store';
 import { ApiError } from '@/lib/errors';
 import { ok, withRoute } from '@/lib/route-handler';
 

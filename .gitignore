@@ -33,3 +33,6 @@ next-env.d.ts
 *.tfstate
 *.tfstate.*
 .terraform/
+
+# Migration output — contains re-encrypted credentials
+migration-sql/

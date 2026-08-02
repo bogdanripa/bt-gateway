@@ -12,7 +12,7 @@
  */
 
 import { requireApiKey, assertWriteAccess } from '@/lib/auth/api-key';
-import { appendJournalEntry, listJournalEntries } from '@/lib/firestore';
+import { appendJournalEntry, listJournalEntries } from '@/lib/store';
 import { ok, readJsonObject, withRoute } from '@/lib/route-handler';
 import { assertAllowed, filterRecords, readRecordFields } from '@/lib/filters';
 

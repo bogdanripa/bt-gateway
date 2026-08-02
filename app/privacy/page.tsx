@@ -37,7 +37,7 @@ export default function PrivacyPage() {
             </li>
             <li>
               <strong>BT Trade credentials.</strong> Your BT username and password are
-              encrypted with Google Cloud KMS before being stored. They are never logged,
+              encrypted with AES-256-GCM envelope encryption before being stored. They are never logged,
               never returned over the API, and used only to sign in to BT Trade on your
               behalf.
             </li>
@@ -76,9 +76,11 @@ export default function PrivacyPage() {
         <section aria-labelledby="where">
           <h2 id="where">Where the data lives</h2>
           <p>
-            BT Gateway runs on Google Cloud (region europe-west3, in Frankfurt) and
-            stores all persistent data in the same region. Secrets are managed by Google
-            Cloud KMS. Diagnostic logs are kept for 30 days by default.
+            BT Gateway runs on a dedicated self-hosted server operated by the service
+            owner, and stores all persistent data on that same machine in a private
+            database that is not reachable from the public internet. Credentials are
+            protected with AES-256-GCM envelope encryption. Diagnostic logs are the
+            application&rsquo;s own container logs and are not retained long-term.
           </p>
         </section>
 

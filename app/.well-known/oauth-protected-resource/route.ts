@@ -11,7 +11,7 @@
  *      flow with PKCE.
  *
  * We declare the gateway itself as both the protected resource and the
- * authorization server — it's a single Cloud Run service.
+ * authorization server — it's a single container serving both.
  */
 
 import { NextResponse } from 'next/server';

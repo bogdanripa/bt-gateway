@@ -16,7 +16,7 @@ import { getPortfolioKey } from '@/lib/bt/portfolio-key';
 import { getEvaluationCurrencyId } from '@/lib/bt/currency';
 import { ApiError } from '@/lib/errors';
 import { ok, withRoute } from '@/lib/route-handler';
-import type { BtMode } from '@/lib/firestore';
+import type { BtMode } from '@/lib/store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';

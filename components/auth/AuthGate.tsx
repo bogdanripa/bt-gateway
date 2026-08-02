@@ -4,7 +4,7 @@
  * sign-in screen for a split second on every page load.
  *
  * Also kicks off a one-time `POST /api/ui/me` on first sign-in to ensure
- * the user doc exists in Firestore.
+ * the user record exists in the database.
  */
 
 'use client';

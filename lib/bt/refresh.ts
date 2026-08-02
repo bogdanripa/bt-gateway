@@ -25,8 +25,8 @@ import {
   tenantFromAuthedUid,
   type BtMode,
   type TenantRef,
-} from '../firestore';
-import { decrypt } from '../kms';
+} from '../store';
+import { decrypt } from '../secret-box';
 import { audit } from '../events';
 import { notifyTenant } from '../telegram';
 import { evictBtClient, instrumentRefresh } from './client-pool';

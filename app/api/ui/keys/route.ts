@@ -8,7 +8,7 @@
 
 import { z } from 'zod';
 import { requireFirebaseUser } from '@/lib/auth/session';
-import { createApiKey, listApiKeys, type BtMode } from '@/lib/firestore';
+import { createApiKey, listApiKeys, type BtMode } from '@/lib/store';
 import { generateApiKey } from '@/lib/auth/api-key';
 import { ApiError } from '@/lib/errors';
 import { audit } from '@/lib/events';

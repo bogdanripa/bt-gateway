@@ -157,7 +157,7 @@ export function CredsCard({ mode }: { mode: Mode }) {
             />
           </div>
           <small className="muted">
-            Stored encrypted via Cloud KMS envelope encryption. Never logged. Used
+            Stored encrypted via AES-256-GCM envelope encryption. Never logged. Used
             only to establish a BT Trade session for this account.
           </small>
           <div className="row" style={{ justifyContent: 'flex-end' }}>

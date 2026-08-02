@@ -16,7 +16,7 @@
 
 import 'server-only';
 import type { BTTradeClient } from '@bogdanripa/bt-trade';
-import type { BtMode, TenantRef } from '../firestore';
+import type { BtMode, TenantRef } from '../store';
 
 export interface MarketOption {
   code: string;

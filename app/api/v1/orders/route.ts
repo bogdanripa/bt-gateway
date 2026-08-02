@@ -135,7 +135,7 @@ export const POST = withRoute(async (req, { requestId }) => {
       type: args.type,
       valability: args.valability,
       // JSON round-trip strips any non-serializable values (Dates → strings,
-      // functions dropped) so the Firestore write never silently fails.
+      // functions dropped) so the audit write never silently fails.
       result: JSON.parse(JSON.stringify(result ?? null)) as unknown,
     },
   });

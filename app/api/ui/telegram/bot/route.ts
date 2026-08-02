@@ -25,10 +25,10 @@ import {
   setTelegramBot,
   deleteTelegramBot,
   clearTelegramLink,
-} from '@/lib/firestore';
+} from '@/lib/store';
 import { ApiError } from '@/lib/errors';
 import { ok, withRoute } from '@/lib/route-handler';
-import { decrypt, encrypt } from '@/lib/kms';
+import { decrypt, encrypt } from '@/lib/secret-box';
 import { getBotProfile, getWebhookInfo, setWebhook } from '@/lib/telegram-bot';
 import { audit } from '@/lib/events';
 
@@ -48,9 +48,12 @@ function webhookUrl(req: Request, secret: string): string {
   const configured = process.env.BT_GATEWAY_PUBLIC_URL?.replace(/\/+$/, '');
   if (configured) return `${configured}/api/v1/telegram/webhook/${secret}`;
 
-  // req.url on Cloud Run is the internal container address (0.0.0.0:8080).
-  // The real public hostname comes from x-forwarded-host (set by the Google
-  // Front End) or the Host header. Fall back to req.url only in local dev.
+  // req.url is the internal container address (the app binds :80 inside the
+  // container), so it is never the public hostname. That comes from
+  // x-forwarded-host, set by the edge proxy, or the Host header. Fall back to
+  // req.url only in local dev. Telegram registers whatever we return here, so
+  // a wrong value silently stops delivering updates — set
+  // BT_GATEWAY_PUBLIC_URL in production.
   const headers = req.headers as Headers;
   const host =
     headers.get('x-forwarded-host') ??

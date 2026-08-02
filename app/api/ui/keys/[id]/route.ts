@@ -10,7 +10,7 @@
 
 import { z } from 'zod';
 import { requireFirebaseUser } from '@/lib/auth/session';
-import { listApiKeys, revokeApiKey, updateApiKeyFilters } from '@/lib/firestore';
+import { listApiKeys, revokeApiKey, updateApiKeyFilters } from '@/lib/store';
 import { ApiError } from '@/lib/errors';
 import { audit } from '@/lib/events';
 import { ok, withRoute } from '@/lib/route-handler';

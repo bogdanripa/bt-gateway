@@ -13,8 +13,8 @@
  */
 
 import 'server-only';
-import { getTelegramBot, getTelegramLink, type TenantRef } from './firestore';
-import { decrypt } from './kms';
+import { getTelegramBot, getTelegramLink, type TenantRef } from './store';
+import { decrypt } from './secret-box';
 import { sendMessageWithToken } from './telegram-bot';
 
 export async function notifyTenant(tenant: TenantRef, text: string): Promise<void> {

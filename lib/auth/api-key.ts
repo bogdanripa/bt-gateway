@@ -19,16 +19,14 @@ import 'server-only';
 import crypto from 'node:crypto';
 import { ApiError } from '../errors';
 import {
-  findKeyHashIndex,
-  getApiKey,
+  findApiKeyByHash,
   listApiKeys,
-  setKeyHashIndex,
   touchApiKey,
   type ApiKeyFilters,
   type BtMode,
   type TenantRef,
   tenantFromAuthedUid,
-} from '../firestore';
+} from '../store';
 import { checkRateLimit } from '../rate-limit';
 import type { NextRequest } from 'next/server';
 
@@ -104,67 +102,32 @@ export interface AuthenticatedCaller {
  * Find the tenant + key record that matches this raw key and return the
  * authenticated caller. Throws ApiError on any failure path.
  *
- * Fast path: read `key_hashes/{sha256}` — a root-level index doc written
- * when the key was created. Hit → one point-read of the owning
- * `users/{uid}/api_keys/{keyId}` doc to validate mode/revokedAt/filters.
+ * One indexed point-read on the UNIQUE `hash` column resolves the bearer to
+ * its owning row. Under Firestore this needed a hand-maintained root-level
+ * `key_hashes` index doc plus a collectionGroup scan to cover keys the index
+ * had missed; a real unique index makes both disappear.
  *
- * Slow path (pre-index keys / index write failed at creation time): fall
- * back to a `collectionGroup('api_keys')` scan. If we find a match this
- * way, backfill the index on the way out so subsequent calls hit the
- * fast path.
+ * The mode carried in the key's prefix must match the mode stored on the row.
+ * That check is what stops a `bvb_demo_` bearer from ever reaching live.
  */
 export async function authenticateApiKey(raw: string): Promise<AuthenticatedCaller> {
   const mode = modeFromKey(raw);
   if (!mode) throw new ApiError('UNAUTHORIZED', 'API key format invalid');
   const expectedHash = hashKey(raw);
 
-  // --- Fast path: hash index ---
-  const indexed = await findKeyHashIndex(expectedHash).catch(() => null);
-  if (indexed) {
-    if (indexed.mode !== mode) throw new ApiError('UNAUTHORIZED', 'API key not recognized');
-    const tenant = tenantFromAuthedUid(indexed.uid);
-    const keyDoc = await getApiKey(tenant, indexed.keyId);
-    if (!keyDoc || keyDoc.revokedAt) throw new ApiError('UNAUTHORIZED', 'API key not recognized');
-    // Verify hash in constant time — defense against a poisoned/stale index.
-    if (!timingSafeEqualStrings(keyDoc.hash, expectedHash)) {
-      throw new ApiError('UNAUTHORIZED', 'API key not recognized');
-    }
-    return finalizeAuth(tenant, mode, indexed.keyId, keyDoc.filters, keyDoc.access);
+  const keyDoc = await findApiKeyByHash(expectedHash);
+  if (!keyDoc || keyDoc.revokedAt || keyDoc.mode !== mode) {
+    throw new ApiError('UNAUTHORIZED', 'API key not recognized');
+  }
+  // Constant-time re-check of the value we looked up by. The lookup itself is
+  // an equality match the database resolved, so this guards against a row
+  // whose stored hash drifted from its key rather than against timing.
+  if (!timingSafeEqualStrings(keyDoc.hash, expectedHash)) {
+    throw new ApiError('UNAUTHORIZED', 'API key not recognized');
   }
 
-  // --- Slow path: collectionGroup scan (for keys created before the index
-  // existed, or where the index write failed). Backfills the index on
-  // successful match. ---
-  const { getFirestore } = await import('firebase-admin/firestore');
-  const { adminApp } = await import('../firebase/admin');
-  const db = getFirestore(adminApp());
-  const snap = await db.collectionGroup('api_keys').get();
-
-  for (const doc of snap.docs) {
-    const data = doc.data() as {
-      hash: string;
-      mode: BtMode;
-      revokedAt?: string;
-      filters?: ApiKeyFilters;
-      access?: 'read' | 'rw';
-    };
-    if (data.mode !== mode) continue;
-    if (data.revokedAt) continue;
-    if (!timingSafeEqualStrings(data.hash, expectedHash)) continue;
-
-    // path: users/{uid}/api_keys/{kid}
-    const parts = doc.ref.path.split('/');
-    const uid = parts[1];
-    const kid = doc.id;
-    const tenant = tenantFromAuthedUid(uid);
-
-    // Backfill the hash index so this key hits the fast path next time.
-    void setKeyHashIndex(expectedHash, uid, kid, mode).catch(() => { /* best-effort */ });
-
-    return finalizeAuth(tenant, mode, kid, data.filters, data.access);
-  }
-
-  throw new ApiError('UNAUTHORIZED', 'API key not recognized');
+  const tenant = tenantFromAuthedUid(keyDoc.uid);
+  return finalizeAuth(tenant, mode, keyDoc.id, keyDoc.filters, keyDoc.access);
 }
 
 function finalizeAuth(
