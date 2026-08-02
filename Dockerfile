@@ -3,8 +3,29 @@
 # API server only. The UI is a static bundle (web/) uploaded to the platform's
 # frontend host by CI — nothing in this image serves HTML.
 #
-# Four things about this host are load-bearing and each fails in a way that
-# looks unrelated to the cause:
+# ## Why the build stages pin --platform=$BUILDPLATFORM
+#
+# The target is linux/arm64 and CI builds on an amd64 runner, so every RUN in
+# an unpinned stage executes under QEMU emulation. Node under emulated arm64
+# does not survive that: `npm ci` dies with
+#
+#     qemu: uncaught target signal 4 (Illegal instruction) - core dumped
+#
+# QEMU does not implement every instruction V8 emits. Pinning the install and
+# bundle stages to $BUILDPLATFORM runs them natively on the builder instead —
+# which also takes the build from tens of minutes to a couple, because nothing
+# is being emulated.
+#
+# This is only safe because the production dependency tree is pure JavaScript:
+# no *.node binaries, and no packages with `os`/`cpu` constraints outside
+# devDependencies. Verify that still holds before adding a dependency:
+#
+#     npm ls --omit=dev --all --parseable | xargs -I{} find {} -name '*.node'
+#
+# If that ever returns something, the deps must be installed on the target
+# platform (and QEMU worked around) rather than copied across.
+#
+# ## Host requirements — four things, each failing in a way that looks unrelated
 #
 #   1. Listen on port 80, dual-stack. The container healthcheck runs INSIDE the
 #      container against http://localhost:80, which resolves to ::1 first,
@@ -19,14 +40,14 @@
 #      (/api/health), or whichever check runs is testing a route you didn't
 #      mean.
 
-# ---- deps -----------------------------------------------------------------
-FROM node:20-alpine AS deps
+# ---- deps (native on the builder) -----------------------------------------
+FROM --platform=$BUILDPLATFORM node:20-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci --no-audit --no-fund
 
-# ---- build ----------------------------------------------------------------
-FROM node:20-alpine AS build
+# ---- build (native on the builder) ----------------------------------------
+FROM --platform=$BUILDPLATFORM node:20-alpine AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY package.json tsconfig.json ./
@@ -35,19 +56,20 @@ COPY lib ./lib
 COPY server ./server
 RUN npm run build
 
-# ---- production dependencies ----------------------------------------------
-# Separate from `deps` so esbuild and typescript don't ship to the runtime.
-FROM node:20-alpine AS prod-deps
+# ---- production dependencies (native on the builder) -----------------------
+# Separate from `deps` so esbuild and typescript never reach the runtime.
+FROM --platform=$BUILDPLATFORM node:20-alpine AS prod-deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev --no-audit --no-fund
 
-# ---- runtime --------------------------------------------------------------
+# ---- runtime (the actual target architecture) ------------------------------
 FROM node:20-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
-# For the HEALTHCHECK below; Coolify tries curl, then wget.
+# For the HEALTHCHECK below; Coolify tries curl, then wget. This is the only
+# emulated step left, and apk is fine under QEMU where Node is not.
 RUN apk add --no-cache curl
 
 COPY --from=prod-deps /app/node_modules ./node_modules
@@ -58,7 +80,7 @@ COPY package.json ./
 ARG GIT_SHA=unknown
 ENV BT_GATEWAY_COMMIT=$GIT_SHA
 
-# Port 80 and a dual-stack bind — note 1 at the top of this file.
+# Port 80 and a dual-stack bind — requirement 1 at the top of this file.
 ENV PORT=80
 ENV HOST="::"
 EXPOSE 80
@@ -66,5 +88,5 @@ EXPOSE 80
 HEALTHCHECK --interval=10s --timeout=3s --start-period=15s \
   CMD curl -fsS http://localhost:80/api/health || exit 1
 
-# No USER line, on purpose — note 2 at the top of this file.
+# No USER line, on purpose — requirement 2 at the top of this file.
 CMD ["node", "dist/server.js"]
