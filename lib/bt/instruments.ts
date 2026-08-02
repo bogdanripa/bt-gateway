@@ -46,6 +46,7 @@ export async function resolveInstrument(
   client: BTTradeClient,
   symbol: string,
   overrideMarketId?: string | number | null,
+  marketsCache?: Map<number, string>,
 ): Promise<ResolvedInstrument> {
   const hits = (await client.markets.searchInstrument(symbol)) as Hit[];
   if (!Array.isArray(hits) || hits.length === 0) {
@@ -63,10 +64,22 @@ export async function resolveInstrument(
   if (pick.marketId === undefined || pick.marketId === null) {
     throw new ApiError('UPSTREAM_UNAVAILABLE', 'searchInstrument hit missing marketId');
   }
+
+  // Canonicalize the market via the id → exchange-name map when available:
+  // hits can carry a segment-level code (e.g. "REGS" for the BVB regulated
+  // segment) while per-key filters are configured with the parent exchange
+  // code ("BVB"). MarketId is stable across segments, so it wins.
+  let market = pick.market;
+  if (marketsCache) {
+    const mid = Number(pick.marketId);
+    const canonical = Number.isFinite(mid) ? marketsCache.get(mid) : undefined;
+    if (canonical) market = canonical;
+  }
+
   return {
     code: pick.code ?? symbol,
     marketId: pick.marketId,
-    market: pick.market,
+    market,
     currency: pick.currency,
   };
 }

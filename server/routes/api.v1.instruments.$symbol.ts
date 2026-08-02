@@ -38,8 +38,10 @@ export const GET = withRoute<{ symbol: string }>(async (req, { params }) => {
   const symbol = params.symbol?.toUpperCase();
   if (!symbol) throw new ApiError('BAD_REQUEST', 'symbol path segment required');
 
-  // Fast-fail before touching BT when the symbol itself is blocked.
-  assertAllowed(caller.filters, { symbol });
+  // Fast-fail before touching BT when the symbol itself is blocked. Only the
+  // stocks axis is knowable here; market + currency are enforced against the
+  // resolved listing below.
+  assertAllowed(caller.filters, { symbol }, ['stocks']);
 
   const overrideMarketId = new URL(req.url).searchParams.get('marketId');
 

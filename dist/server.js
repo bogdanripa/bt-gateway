@@ -2008,13 +2008,14 @@ function isAllowedOn(filters, axis, value) {
   }
   return true;
 }
-function assertAllowed(filters, picks) {
+function assertAllowed(filters, picks, axes = ["markets", "currencies", "stocks"]) {
   const checks = [
     ["markets", picks.market],
     ["currencies", picks.currency],
     ["stocks", picks.symbol]
   ];
   for (const [axis, v] of checks) {
+    if (!axes.includes(axis)) continue;
     const a = axisOf(filters, axis);
     if (!hasConstraints(a)) continue;
     if (!isAllowedOn(filters, axis, v)) {
@@ -3037,7 +3038,7 @@ var GET19 = withRoute(async (req) => {
   const caller = await requireApiKey(req);
   const market = new URL(req.url).searchParams.get("market") ?? void 0;
   const endDate = new URL(req.url).searchParams.get("endDate") ?? void 0;
-  if (market) assertAllowed(caller.filters, { market });
+  if (market) assertAllowed(caller.filters, { market }, ["markets"]);
   let portfolioKey;
   let holdings;
   let marketsCache;
@@ -3071,7 +3072,7 @@ var GET20 = withRoute(async (req, { params }) => {
   const caller = await requireApiKey(req);
   const symbol = params.symbol?.toUpperCase();
   if (!symbol) throw new ApiError("BAD_REQUEST", "symbol path segment required");
-  assertAllowed(caller.filters, { symbol });
+  assertAllowed(caller.filters, { symbol }, ["stocks"]);
   const overrideMarketId = new URL(req.url).searchParams.get("marketId");
   try {
     const { code, marketId, instrument, instruments, marketsCache } = await runWithSession(
@@ -3164,7 +3165,7 @@ var GET21 = withRoute(async (req) => {
 function marketCode(r) {
   if (!r || typeof r !== "object") return void 0;
   const o = r;
-  for (const k of ["code", "market", "marketCode", "id"]) {
+  for (const k of ["name", "Name", "key", "Key", "code", "Code", "market", "marketCode"]) {
     const v = o[k];
     if (typeof v === "string" && v.trim()) return v.trim();
   }
@@ -3217,7 +3218,7 @@ var GET23 = withRoute(async (req, { params }) => {
 import { z as z6 } from "zod";
 
 // lib/bt/instruments.ts
-async function resolveInstrument(client, symbol, overrideMarketId) {
+async function resolveInstrument(client, symbol, overrideMarketId, marketsCache) {
   const hits = await client.markets.searchInstrument(symbol);
   if (!Array.isArray(hits) || hits.length === 0) {
     throw new ApiError("NOT_FOUND", `Instrument not found: ${symbol}`);
@@ -3232,10 +3233,16 @@ async function resolveInstrument(client, symbol, overrideMarketId) {
   if (pick.marketId === void 0 || pick.marketId === null) {
     throw new ApiError("UPSTREAM_UNAVAILABLE", "searchInstrument hit missing marketId");
   }
+  let market = pick.market;
+  if (marketsCache) {
+    const mid = Number(pick.marketId);
+    const canonical = Number.isFinite(mid) ? marketsCache.get(mid) : void 0;
+    if (canonical) market = canonical;
+  }
   return {
     code: pick.code ?? symbol,
     marketId: pick.marketId,
-    market: pick.market,
+    market,
     currency: pick.currency
   };
 }
@@ -3260,14 +3267,15 @@ var POST8 = withRoute(async (req) => {
   }
   const args = parsed.data;
   const symbolUp = args.symbol.toUpperCase();
-  assertAllowed(caller.filters, { symbol: symbolUp });
+  assertAllowed(caller.filters, { symbol: symbolUp }, ["stocks"]);
   try {
     const { preview, resolvedCode, resolvedMarketId } = await runWithSession(
       caller.tenant,
       caller.mode,
       async (client) => {
         const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
-        const resolved = await resolveInstrument(client, symbolUp, args.marketId);
+        const marketsCache = await getMarketsCache(caller.tenant, caller.mode, client).catch(() => void 0);
+        const resolved = await resolveInstrument(client, symbolUp, args.marketId, marketsCache);
         assertAllowed(caller.filters, {
           symbol: resolved.code,
           market: resolved.market,
@@ -3318,14 +3326,15 @@ var POST9 = withRoute(async (req, { requestId }) => {
     throw new ApiError("BAD_REQUEST", "price is required for non-market orders");
   }
   const symbolUp = args.symbol.toUpperCase();
-  assertAllowed(caller.filters, { symbol: symbolUp });
+  assertAllowed(caller.filters, { symbol: symbolUp }, ["stocks"]);
   let symbol = symbolUp;
   let marketId = args.marketId;
   let result;
   try {
     result = await runWithSessionMutating(caller.tenant, caller.mode, async (client) => {
       const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
-      const resolved = await resolveInstrument(client, symbol, marketId);
+      const marketsCache = await getMarketsCache(caller.tenant, caller.mode, client).catch(() => void 0);
+      const resolved = await resolveInstrument(client, symbol, marketId, marketsCache);
       symbol = resolved.code;
       marketId = resolved.marketId;
       assertAllowed(caller.filters, {
@@ -3389,7 +3398,7 @@ var GET24 = withRoute(async (req) => {
   const sideRaw = sp.get("side");
   const side = sideRaw === "buy" || sideRaw === "sell" ? sideRaw : void 0;
   const symbolParam = sp.get("symbol") ?? void 0;
-  if (symbolParam) assertAllowed(caller.filters, { symbol: symbolParam });
+  if (symbolParam) assertAllowed(caller.filters, { symbol: symbolParam }, ["stocks"]);
   try {
     const { orders: rawOrders, marketsCache } = await runWithSession(
       caller.tenant,

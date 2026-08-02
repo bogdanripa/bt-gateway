@@ -15,7 +15,9 @@ import { filterRecords } from '@/lib/filters';
 function marketCode(r: unknown): string | undefined {
   if (!r || typeof r !== 'object') return undefined;
   const o = r as Record<string, unknown>;
-  for (const k of ['code', 'market', 'marketCode', 'id']) {
+  // Same priority as markets-cache: BT carries the short exchange code
+  // (BVB, XETRA, US…) under `name`/`key`; `description` is the long label.
+  for (const k of ['name', 'Name', 'key', 'Key', 'code', 'Code', 'market', 'marketCode']) {
     const v = o[k];
     if (typeof v === 'string' && v.trim()) return v.trim();
   }

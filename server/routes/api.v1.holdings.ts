@@ -24,7 +24,7 @@ export const GET = withRoute(async (req) => {
 
   // If the caller explicitly requested a market, reject up-front when that
   // market is filtered out — otherwise they'd get an empty array with no hint.
-  if (market) assertAllowed(caller.filters, { market });
+  if (market) assertAllowed(caller.filters, { market }, ['markets']);
 
   let portfolioKey: string;
   let holdings: unknown;

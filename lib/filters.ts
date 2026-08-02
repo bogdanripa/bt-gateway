@@ -129,10 +129,20 @@ export function isAllowedOn(
  * Use this at the top of every mutating route (POST orders, preview, journal
  * append, fill append) after parsing the body, and at single-resource reads
  * (orders/:id, instruments/:symbol) once the target is resolved.
+ *
+ * `axes` narrows which axes this call enforces. Fast-fail sites that run
+ * BEFORE instrument resolution only know the symbol — checking the markets/
+ * currencies axes there would fail-closed on `<unknown>` for every request
+ * made with a market- or currency-restricted key, even for an instrument the
+ * key is allowed to trade. Those sites pass `['stocks']` (or `['markets']`
+ * for a ?market= query param) and rely on the full-axes check that every
+ * resolution path performs afterwards, where fail-closed-on-unknown still
+ * guards the bypass described above.
  */
 export function assertAllowed(
   filters: ApiKeyFilters | undefined,
   picks: { market?: string | null; currency?: string | null; symbol?: string | null },
+  axes: FilterAxisName[] = ['markets', 'currencies', 'stocks'],
 ): void {
   const checks: Array<[FilterAxisName, string | null | undefined]> = [
     ['markets', picks.market],
@@ -140,6 +150,7 @@ export function assertAllowed(
     ['stocks', picks.symbol],
   ];
   for (const [axis, v] of checks) {
+    if (!axes.includes(axis)) continue;
     const a = axisOf(filters, axis);
     if (!hasConstraints(a)) continue;
     if (!isAllowedOn(filters, axis, v)) {

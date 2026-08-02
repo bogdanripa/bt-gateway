@@ -19,6 +19,7 @@ import { z } from 'zod';
 import { requireApiKey } from '@/lib/auth/api-key';
 import { runWithSession } from '@/lib/bt/client-pool';
 import { resolveInstrument } from '@/lib/bt/instruments';
+import { getMarketsCache } from '@/lib/bt/markets-cache';
 import { getPortfolioKey } from '@/lib/bt/portfolio-key';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError, json } from '@/lib/errors';
@@ -45,9 +46,10 @@ export const POST = withRoute(async (req) => {
   }
   const args = parsed.data;
 
-  // Reject up-front if the requested symbol is filtered out.
+  // Reject up-front if the requested symbol is filtered out. Market and
+  // currency are enforced after resolution below.
   const symbolUp = args.symbol.toUpperCase();
-  assertAllowed(caller.filters, { symbol: symbolUp });
+  assertAllowed(caller.filters, { symbol: symbolUp }, ['stocks']);
 
   try {
     const { preview, resolvedCode, resolvedMarketId } = await runWithSession(
@@ -56,8 +58,12 @@ export const POST = withRoute(async (req) => {
       async (client) => {
         const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
         // Always resolve via searchInstrument so the market + currency filter
-        // applies even when marketId is supplied explicitly.
-        const resolved = await resolveInstrument(client, symbolUp, args.marketId);
+        // applies even when marketId is supplied explicitly. The markets cache
+        // canonicalizes segment codes (REGS → BVB) for the filter check; on
+        // cache failure resolution falls back to the hit's own market string.
+        const marketsCache = await getMarketsCache(caller.tenant, caller.mode, client)
+          .catch(() => undefined);
+        const resolved = await resolveInstrument(client, symbolUp, args.marketId, marketsCache);
         assertAllowed(caller.filters, {
           symbol: resolved.code,
           market: resolved.market,

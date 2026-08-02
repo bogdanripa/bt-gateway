@@ -65,7 +65,7 @@ export const POST = withRoute(async (req, { requestId }) => {
   // Up-front check on symbol; market + currency get checked after we resolve
   // the instrument via searchInstrument.
   const symbolUp = args.symbol.toUpperCase();
-  assertAllowed(caller.filters, { symbol: symbolUp });
+  assertAllowed(caller.filters, { symbol: symbolUp }, ['stocks']);
 
   let symbol = symbolUp;
   let marketId = args.marketId;
@@ -80,8 +80,12 @@ export const POST = withRoute(async (req, { requestId }) => {
       // marketId — so the filter can bite on the resolved market + currency.
       // Otherwise markets.include=[BVB] could be bypassed by passing a marketId
       // for a foreign exchange, and currencies.include=[RON] could be bypassed
-      // by buying TSLA via marketId=4 (US).
-      const resolved = await resolveInstrument(client, symbol, marketId);
+      // by buying TSLA via marketId=4 (US). The markets cache canonicalizes
+      // segment codes (REGS → BVB) so restricted keys match; on cache failure
+      // resolution falls back to the hit's own market string.
+      const marketsCache = await getMarketsCache(caller.tenant, caller.mode, client)
+        .catch(() => undefined);
+      const resolved = await resolveInstrument(client, symbol, marketId, marketsCache);
       symbol = resolved.code;
       marketId = resolved.marketId;
       assertAllowed(caller.filters, {
@@ -152,7 +156,7 @@ export const GET = withRoute(async (req) => {
 
   // If the caller narrowed by symbol, reject when that symbol isn't allowed
   // rather than silently returning [].
-  if (symbolParam) assertAllowed(caller.filters, { symbol: symbolParam });
+  if (symbolParam) assertAllowed(caller.filters, { symbol: symbolParam }, ['stocks']);
 
   try {
     const { orders: rawOrders, marketsCache } = await runWithSession(
