@@ -2162,7 +2162,33 @@ function filterPortfolioSelectResponse(payload, filters, marketsCache) {
       }
     }
   }
+  const subKey = "SubscriptionKey" in root ? "SubscriptionKey" : "subscriptionKey" in root ? "subscriptionKey" : null;
+  if (subKey) {
+    const sub = root[subKey];
+    if (sub && typeof sub === "object") {
+      const s = sub;
+      const cursKey = "Currencies" in s ? "Currencies" : "currencies" in s ? "currencies" : null;
+      if (cursKey && Array.isArray(s[cursKey])) {
+        s[cursKey] = s[cursKey].filter((entry) => {
+          const { market, currency } = readPortfolioName(entry);
+          return isAllowedOn(filters, "markets", market) && isAllowedOn(filters, "currencies", currency);
+        });
+      }
+    }
+  }
   return payload;
+}
+function readPortfolioName(entry) {
+  if (!entry || typeof entry !== "object") return { market: null, currency: null };
+  const o = entry;
+  const raw = typeof o.PortfolioName === "string" ? o.PortfolioName : typeof o.portfolioName === "string" ? o.portfolioName : null;
+  if (!raw) return { market: null, currency: null };
+  const tokens = raw.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return { market: null, currency: null };
+  return {
+    market: tokens.length >= 2 ? tokens[0] : null,
+    currency: tokens[tokens.length - 1]
+  };
 }
 function filterPosition(pos, filters, marketsCache) {
   if (!pos || typeof pos !== "object") return pos;

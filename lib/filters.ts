@@ -338,6 +338,13 @@ export function readRecordFields(
  *     (per-asset-type totals) we check the row's Ticker against the stocks
  *     axis.
  *   - `Total.CurrencyRates` — filtered by rate.Name against currencies axis.
+ *   - `SubscriptionKey.Currencies` — the per-portfolio cash balances BT
+ *     attaches for the live-price websocket. Filtered by both axes.
+ *
+ * This is an allowlist of known branches: a shape that isn't enumerated here
+ * passes through UNFILTERED. `SubscriptionKey` was missed originally and
+ * leaked every non-RON, non-BVB balance to keys restricted to RON/BVB. When
+ * bt-trade grows a new branch on this payload, add it here.
  *
  * Mutates the input in place — callers pass the just-received BT response so
  * there's no shared state to worry about.
@@ -417,7 +424,59 @@ export function filterPortfolioSelectResponse(
     }
   }
 
+  // (3) SubscriptionKey.Currencies — the per-portfolio cash rows BT ships for
+  // the live-price websocket. These carry no Currency/Market string that
+  // readRecordFields could pick up: just a numeric CurrencyId and the pair
+  // encoded in PortfolioName ("BVB RON", "INTL USD"), so they need their own
+  // branch. Unfiltered, a RON/BVB-restricted key saw every EUR/USD/GBP
+  // balance on the account.
+  const subKey = 'SubscriptionKey' in root ? 'SubscriptionKey'
+    : 'subscriptionKey' in root ? 'subscriptionKey' : null;
+  if (subKey) {
+    const sub = root[subKey];
+    if (sub && typeof sub === 'object') {
+      const s = sub as Record<string, unknown>;
+      const cursKey = 'Currencies' in s ? 'Currencies' : 'currencies' in s ? 'currencies' : null;
+      if (cursKey && Array.isArray(s[cursKey])) {
+        s[cursKey] = (s[cursKey] as unknown[]).filter((entry) => {
+          const { market, currency } = readPortfolioName(entry);
+          return (
+            isAllowedOn(filters, 'markets', market) &&
+            isAllowedOn(filters, 'currencies', currency)
+          );
+        });
+      }
+    }
+  }
+
   return payload;
+}
+
+/**
+ * Split a BT portfolio name into its market and currency parts.
+ *
+ * BT names these "<MARKET> <CURRENCY>" — "BVB RON", "BVB EUR", "INTL USD".
+ * The trailing token is the currency; the leading one is the market (absent
+ * on single-token names, which we report as an unknown market).
+ *
+ * Deliberately fails CLOSED: anything unparseable yields nulls, and
+ * `isAllowedOn` rejects a null value whenever the axis has an include list.
+ * So if BT ever renames these, the failure is over-filtering — never a
+ * silently leaked balance.
+ */
+function readPortfolioName(entry: unknown): { market: string | null; currency: string | null } {
+  if (!entry || typeof entry !== 'object') return { market: null, currency: null };
+  const o = entry as Record<string, unknown>;
+  const raw = typeof o.PortfolioName === 'string' ? o.PortfolioName
+    : typeof o.portfolioName === 'string' ? o.portfolioName
+    : null;
+  if (!raw) return { market: null, currency: null };
+  const tokens = raw.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return { market: null, currency: null };
+  return {
+    market: tokens.length >= 2 ? tokens[0] : null,
+    currency: tokens[tokens.length - 1],
+  };
 }
 
 function filterPosition(
