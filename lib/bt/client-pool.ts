@@ -53,9 +53,11 @@ import {
  * Tenants with a `login()` currently in flight. Guarantees at most ONE BT
  * sign-in at a time per tenant, so demo + live (and any concurrent request)
  * can't each fire their own 2FA — which BT emails to the same person, and
- * whose codes then collide / invalidate each other. In-memory is sufficient
- * because the service runs as a single Cloud Run instance (--max-instances=1);
- * there is deliberately no cross-instance coordination.
+ * whose codes then collide / invalidate each other. A process-local Set is
+ * sufficient because the platform runs exactly one container for this app —
+ * it scales to zero when idle, but never to two. There is deliberately no
+ * cross-instance coordination, so horizontal scaling would break this and
+ * would need the guard moved into Postgres.
  */
 const loginInProgress = new Set<string>();
 

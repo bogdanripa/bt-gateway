@@ -4,9 +4,10 @@ Multi-tenant HTTP gateway in front of [BT Trade](https://bt-trade.ro) (Banca
 Transilvania's retail trading platform). Exposes a stable REST API + web UI on
 top of an otherwise IP-pinned, OTP-gated, refresh-token-hostile broker.
 
-Runs as a single always-warm container on a self-hosted Raspberry Pi, behind
-one stable egress IP so BT's refresh tokens survive across restarts — the
-whole reason this service exists.
+Runs as a scale-to-zero container on a self-hosted Raspberry Pi, behind one
+stable egress IP so BT's sessions survive across restarts — the whole reason
+this service exists. Session state lives in Postgres, not in the process, so
+the container is free to stop when idle.
 
 ---
 
@@ -22,7 +23,7 @@ day BT's fraud heuristics make things unpleasant.
 
 bt-gateway solves this for good:
 
-- **One pinned identity**. A single always-warm container on the Pi, so
+- **One pinned identity**. A single container on the Pi, so
   every call to BT leaves from the same home broadband address. The refresh
   token BT issued two weeks ago still works today. (This used to be a Cloud
   Run service pinned behind a reserved static IP via VPC Connector + Cloud
@@ -58,7 +59,7 @@ request — a `bvb_demo_…` key physically cannot place a real-money order.
 | `/api/v1/orders` | POST | Place an order (audited, Telegrammed) |
 | `/api/v1/orders` | GET | List orders (`?statuses=`, `?side=`, `?symbol=`, date range) |
 | `/api/v1/orders/:id` | GET | Order details + history + allowed actions |
-| `/api/v1/session/refresh` | POST | Force a refresh cycle (for the cron) |
+| `/api/v1/session/refresh` | POST | Force a refresh cycle |
 
 All responses follow a single error envelope on failure:
 
@@ -85,7 +86,7 @@ client-side error with the container logs.
   - ntfy topic for each mode's SMS OTP forwarding — copy it into your phone
     Shortcut.
   - Telegram link (optional). Receives sign-in / sign-in-failure alerts.
-    Routine 45-min refreshes do **not** ping Telegram.
+    Routine refreshes do **not** ping Telegram.
 
 ---
 
@@ -116,7 +117,6 @@ Browser (UI) ──────► static SPA on the platform's frontend host (n
                                             ▼
                               https://ntfy.sh/<per-username topic>
 
-Platform cron ──────► /api/internal/cron/refresh (shared secret, every 45 min)
 ```
 
 **Data model** — every table is keyed by `uid`, and mode-scoped tables carry
@@ -188,7 +188,6 @@ Set on the app itself (not in the repo, not in GitHub secrets):
 |---|---|
 | `MASTER_KEY` | 32 bytes base64 (`openssl rand -base64 32`). **Losing this makes every stored credential unrecoverable.** |
 | `MASTER_KEY_PREVIOUS` | optional, comma-separated; decrypt-only, for rotation |
-| `INTERNAL_CRON_SECRET` | shared secret for `/api/internal/cron/refresh` |
 | `BT_GATEWAY_PUBLIC_URL` | `https://bt-gateway-coolify.bogdanripa.com` — canonical origin for OAuth metadata and Telegram webhook registration |
 | `FIREBASE_PROJECT_ID` | `auto-trader-493814` |
 | `FIREBASE_WEB_API_KEY` | Firebase console → Project settings → Web app |
@@ -198,14 +197,16 @@ Set on the app itself (not in the repo, not in GitHub secrets):
 The schema is applied by the app itself on first query (`lib/db.ts`), so
 there is no migration step in the pipeline.
 
-The 45-minute refresh is a platform cron calling `POST
-/api/internal/cron/refresh` with `{"secret": "<INTERNAL_CRON_SECRET>"}` in the
-body — the scheduler cannot set headers, so the route accepts the secret in
-the body as well as in an `Authorization` header.
+There is no refresh cron. The container scales to zero when idle, so a
+scheduled sweep would only defeat the point by waking it every half hour.
+Tokens refresh lazily on the transport's 401-retry, and an expired session
+surfaces as `SESSION_EXPIRED` (503) for the user to re-auth.
 
-`sleep_when_idle` must stay **off**. The BT client pool and the sign-in
-single-login guard are both in-memory, so a container that scales to zero
-loses its warm sessions and re-logs in on the next request.
+`sleep_when_idle` is **on**. Every BT session snapshot is persisted to
+`bt_sessions` on each token rotation and restored on the next cold start, so
+the process holds only caches. What must NOT change is running more than one
+container: the sign-in single-login guard is process-local, and two instances
+would each fire their own 2FA.
 
 Telegram is **per-user**, not server-wide — each user creates their own bot
 via @BotFather and registers it in Settings. See
@@ -291,7 +292,6 @@ Useful envs for local dev:
 | `FIREBASE_PROJECT_ID` | your Firebase project |
 | `FIREBASE_WEB_API_KEY`, `FIREBASE_WEB_AUTH_DOMAIN` | Web SDK config |
 | `BT_CLIENT_DEBUG=1` | verbose bt-trade logs to stdout |
-| `INTERNAL_CRON_SECRET` | required to exercise the cron route |
 
 Use a throwaway `MASTER_KEY` locally. Pointing a local instance at the
 production key buys nothing, since the production database is unreachable

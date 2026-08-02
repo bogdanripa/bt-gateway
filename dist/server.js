@@ -238,72 +238,26 @@ async function GET3() {
   );
 }
 
-// lib/route-handler.ts
-function withRoute(fn) {
-  return async (req, ctx) => {
-    const requestId = newRequestId();
-    const start = Date.now();
-    let status = 200;
-    let errCode;
-    const path = new URL(req.url).pathname;
-    try {
-      const res = await fn(req, { params: ctx.params, requestId });
-      status = res.status;
-      res.headers.set("x-request-id", requestId);
-      return res;
-    } catch (e) {
-      const res = toErrorResponse(e, requestId);
-      status = res.status;
-      errCode = e instanceof ApiError ? e.code : "INTERNAL";
-      console.error(
-        JSON.stringify({
-          severity: e instanceof ApiError && e.status < 500 ? "WARNING" : "ERROR",
-          msg: "route.error",
-          requestId,
-          path,
-          method: req.method,
-          code: errCode,
-          message: e?.message,
-          context: e instanceof ApiError ? e.context : void 0,
-          stack: e instanceof Error && !(e instanceof ApiError) ? e.stack : void 0
-        })
-      );
-      res.headers.set("x-request-id", requestId);
-      return res;
-    } finally {
-      console.log(
-        JSON.stringify({
-          severity: status >= 500 ? "ERROR" : "INFO",
-          msg: "route.access",
-          requestId,
-          path,
-          method: req.method,
-          status,
-          code: errCode,
-          latencyMs: Date.now() - start
-        })
-      );
-    }
-  };
+// lib/firebase/admin.ts
+import { getApps, initializeApp } from "firebase-admin/app";
+import { getAuth } from "firebase-admin/auth";
+function projectId() {
+  return process.env.FIREBASE_PROJECT_ID ?? process.env.GOOGLE_CLOUD_PROJECT ?? // Last-ditch fallback for local dev before we export the var.
+  "auto-trader-493814";
 }
-function ok(data, init = {}) {
-  return json(data, init);
-}
-async function readJsonObject(req) {
-  let body;
-  try {
-    body = await req.json();
-  } catch {
-    throw new ApiError("BAD_REQUEST", "Body must be JSON");
+var app = null;
+function adminApp() {
+  if (app) return app;
+  if (getApps().length > 0) {
+    app = getApps()[0];
+    return app;
   }
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    throw new ApiError("BAD_REQUEST", "Body must be a JSON object");
-  }
-  return body;
+  app = initializeApp({ projectId: projectId() });
+  return app;
 }
-
-// lib/bt/refresh.ts
-import { BTTradeClient as BTTradeClient2, ntfyOtpProvider as ntfyOtpProvider2, defaultNtfyTopic as defaultNtfyTopic2 } from "@bogdanripa/bt-trade";
+function adminAuth() {
+  return getAuth(adminApp());
+}
 
 // lib/store.ts
 import crypto3 from "node:crypto";
@@ -622,10 +576,6 @@ async function setBtSession(t, mode, snapshot) {
 }
 async function deleteBtSession(t, mode) {
   await q(`DELETE FROM bt_sessions WHERE uid = $1 AND mode = $2`, [t.uid, mode]);
-}
-async function listActiveTenantUids() {
-  const rows = await q(`SELECT DISTINCT uid FROM bt_sessions`);
-  return rows.map((r) => r.uid);
 }
 function toApiKeyDoc(row) {
   return {
@@ -1038,6 +988,123 @@ async function consumeOauthCode(codeHash) {
   };
 }
 
+// lib/auth/session.ts
+async function requireFirebaseUser(req) {
+  const auth = req.headers.get("authorization");
+  const m = auth?.match(/^Bearer\s+(.+)$/i);
+  if (!m) throw new ApiError("UNAUTHORIZED", "Missing ID token");
+  const token = m[1].trim();
+  try {
+    const decoded = await adminAuth().verifyIdToken(token);
+    const email = decoded.email ?? "";
+    const bypassEnabled = process.env.ALLOW_UNVERIFIED_EMAIL === "1" && process.env.NODE_ENV !== "production";
+    if (!decoded.email_verified && !bypassEnabled) {
+      throw new ApiError("FORBIDDEN", "Email not verified");
+    }
+    return {
+      tenant: tenantFromAuthedUid(decoded.uid),
+      email,
+      isAdmin: decoded.isAdmin === true
+    };
+  } catch (e) {
+    if (e instanceof ApiError) throw e;
+    throw new ApiError("UNAUTHORIZED", "Invalid or expired ID token", {
+      context: { err: e.message }
+    });
+  }
+}
+
+// lib/bt/client-pool.ts
+import {
+  BTTradeClient,
+  ntfyOtpProvider,
+  defaultNtfyTopic
+} from "@bogdanripa/bt-trade";
+
+// lib/bt/session-internals.ts
+import { AuthError } from "@bogdanripa/bt-trade";
+function isSessionExpired(e) {
+  if (!e) return false;
+  if (e instanceof AuthError) return true;
+  const msg = e.message ?? "";
+  if (!msg) return false;
+  return /Session refresh failed|Refresh token has expired|NOT_LOGGED_IN|Cannot refresh/i.test(msg);
+}
+function rtTail(rt) {
+  if (typeof rt !== "string" || rt.length < 8) return null;
+  return rt.slice(-8);
+}
+function instrumentRefresh(client, ctx) {
+  const auth = client.auth;
+  const clearTimer = () => {
+    if (auth._refreshTimer) {
+      clearTimeout(auth._refreshTimer);
+      auth._refreshTimer = null;
+    }
+  };
+  clearTimer();
+  const originalLogin = client.login.bind(client);
+  client.login = async function(args) {
+    try {
+      return await originalLogin(args);
+    } finally {
+      clearTimer();
+    }
+  };
+  const originalRestore = client.restore.bind(client);
+  client.restore = function(snap) {
+    try {
+      return originalRestore(snap);
+    } finally {
+      clearTimer();
+    }
+  };
+  const original = auth.refresh.bind(auth);
+  auth.refresh = async function() {
+    const before = client.toSnapshot();
+    console.log(JSON.stringify({
+      severity: "INFO",
+      msg: "bt.refresh.summary.attempt",
+      uid: ctx.uid,
+      mode: ctx.mode,
+      source: ctx.source,
+      rtSentTail: rtTail(before?.refreshToken),
+      rtSentExpiresAt: before?.refreshTokenExpires ?? null
+    }));
+    try {
+      await original();
+    } catch (e) {
+      console.warn(JSON.stringify({
+        severity: "WARNING",
+        msg: "bt.refresh.summary.result",
+        uid: ctx.uid,
+        mode: ctx.mode,
+        source: ctx.source,
+        status: "err",
+        rtSentTail: rtTail(before?.refreshToken),
+        errMessage: e?.message ?? String(e)
+      }));
+      throw e;
+    } finally {
+      clearTimer();
+    }
+    const after = client.toSnapshot();
+    console.log(JSON.stringify({
+      severity: "INFO",
+      msg: "bt.refresh.summary.result",
+      uid: ctx.uid,
+      mode: ctx.mode,
+      source: ctx.source,
+      status: "ok",
+      rtSentTail: rtTail(before?.refreshToken),
+      rtReceivedTail: rtTail(after?.refreshToken),
+      rtRotated: !!after?.refreshToken && after.refreshToken !== before?.refreshToken,
+      rtReceivedExpiresAt: after?.refreshTokenExpires ?? null,
+      accessTokenExpiresAt: after?.expiresAt ? new Date(after.expiresAt).toISOString() : null
+    }));
+  };
+}
+
 // lib/secret-box.ts
 import crypto4 from "node:crypto";
 var VERSION = 1;
@@ -1314,97 +1381,6 @@ async function notifyTenant(tenant, text) {
 }
 
 // lib/bt/client-pool.ts
-import {
-  BTTradeClient,
-  ntfyOtpProvider,
-  defaultNtfyTopic
-} from "@bogdanripa/bt-trade";
-
-// lib/bt/session-internals.ts
-import { AuthError } from "@bogdanripa/bt-trade";
-function isSessionExpired(e) {
-  if (!e) return false;
-  if (e instanceof AuthError) return true;
-  const msg = e.message ?? "";
-  if (!msg) return false;
-  return /Session refresh failed|Refresh token has expired|NOT_LOGGED_IN|Cannot refresh/i.test(msg);
-}
-function rtTail(rt) {
-  if (typeof rt !== "string" || rt.length < 8) return null;
-  return rt.slice(-8);
-}
-function instrumentRefresh(client, ctx) {
-  const auth = client.auth;
-  const clearTimer = () => {
-    if (auth._refreshTimer) {
-      clearTimeout(auth._refreshTimer);
-      auth._refreshTimer = null;
-    }
-  };
-  clearTimer();
-  const originalLogin = client.login.bind(client);
-  client.login = async function(args) {
-    try {
-      return await originalLogin(args);
-    } finally {
-      clearTimer();
-    }
-  };
-  const originalRestore = client.restore.bind(client);
-  client.restore = function(snap) {
-    try {
-      return originalRestore(snap);
-    } finally {
-      clearTimer();
-    }
-  };
-  const original = auth.refresh.bind(auth);
-  auth.refresh = async function() {
-    const before = client.toSnapshot();
-    console.log(JSON.stringify({
-      severity: "INFO",
-      msg: "bt.refresh.summary.attempt",
-      uid: ctx.uid,
-      mode: ctx.mode,
-      source: ctx.source,
-      rtSentTail: rtTail(before?.refreshToken),
-      rtSentExpiresAt: before?.refreshTokenExpires ?? null
-    }));
-    try {
-      await original();
-    } catch (e) {
-      console.warn(JSON.stringify({
-        severity: "WARNING",
-        msg: "bt.refresh.summary.result",
-        uid: ctx.uid,
-        mode: ctx.mode,
-        source: ctx.source,
-        status: "err",
-        rtSentTail: rtTail(before?.refreshToken),
-        errMessage: e?.message ?? String(e)
-      }));
-      throw e;
-    } finally {
-      clearTimer();
-    }
-    const after = client.toSnapshot();
-    console.log(JSON.stringify({
-      severity: "INFO",
-      msg: "bt.refresh.summary.result",
-      uid: ctx.uid,
-      mode: ctx.mode,
-      source: ctx.source,
-      status: "ok",
-      rtSentTail: rtTail(before?.refreshToken),
-      rtReceivedTail: rtTail(after?.refreshToken),
-      rtRotated: !!after?.refreshToken && after.refreshToken !== before?.refreshToken,
-      rtReceivedExpiresAt: after?.refreshTokenExpires ?? null,
-      accessTokenExpiresAt: after?.expiresAt ? new Date(after.expiresAt).toISOString() : null
-    }));
-  };
-}
-
-// lib/bt/client-pool.ts
 var loginInProgress = /* @__PURE__ */ new Set();
 var pool2 = /* @__PURE__ */ new Map();
 var inflight = /* @__PURE__ */ new Map();
@@ -1594,191 +1570,6 @@ async function runWithSessionMutating(tenant, mode, op, opts = {}) {
   return op(client);
 }
 
-// lib/bt/refresh.ts
-async function refreshTenantMode(t, mode, requestId) {
-  const session = await getBtSession(t, mode);
-  if (!session?.snapshot) {
-    return { uid: t.uid, mode, status: "skipped", message: "no session" };
-  }
-  const creds = await getBtCreds(t, mode);
-  const username = creds ? await decrypt(creds.usernameCipher).catch(() => "") : "";
-  const otpProvider = ntfyOtpProvider2({
-    topic: username ? defaultNtfyTopic2(username) : "bt-gateway-cron-dummy",
-    timeoutMs: 1e3
-    // we never expect to enter this path from cron
-  });
-  const refreshDebug = process.env.BT_REFRESH_DEBUG === "1";
-  const client = new BTTradeClient2({
-    demo: mode === "demo",
-    otpProvider,
-    timeoutMs: 2e4,
-    ...refreshDebug ? {
-      debug: true,
-      log: (msg, data) => {
-        if (msg !== "http:request" && msg !== "http:response") return;
-        console.log(JSON.stringify({
-          severity: "INFO",
-          msg: `bt.refresh.${msg.split(":")[1]}`,
-          uid: t.uid,
-          mode,
-          requestId,
-          data
-        }));
-      }
-    } : {},
-    onSessionChange: async (snap) => {
-      if (snap) await setBtSession(t, mode, snap).catch(() => {
-      });
-    }
-  });
-  instrumentRefresh(client, { uid: t.uid, mode, source: "cron" });
-  try {
-    client.restore(session.snapshot);
-  } catch (e) {
-    return { uid: t.uid, mode, status: "err", message: `restore failed: ${e.message}` };
-  }
-  try {
-    await client.auth.refresh();
-  } catch (e) {
-    const msg = e.message || "refresh failed";
-    await audit({
-      tenant: t,
-      type: "refresh.failure",
-      actor: "cron",
-      mode,
-      status: "err",
-      requestId,
-      error: { code: "REFRESH_FAILED", message: msg }
-    });
-    await deleteBtSession(t, mode).catch(() => {
-    });
-    evictBtClient(t, mode);
-    await notifyTenant(
-      t,
-      `bt-gateway: ${mode} refresh failed (${msg}). The session was cleared; the next request will require a fresh SMS OTP via ntfy.`
-    );
-    return { uid: t.uid, mode, status: "err", message: msg };
-  }
-  await audit({
-    tenant: t,
-    type: "refresh.success",
-    actor: "cron",
-    mode,
-    status: "ok",
-    requestId
-  });
-  return { uid: t.uid, mode, status: "ok" };
-}
-async function refreshAllTenants(requestId) {
-  const uids = await listActiveTenantUids();
-  const results = [];
-  for (const uid of uids) {
-    const t = tenantFromAuthedUid(uid);
-    for (const mode of ["demo", "live"]) {
-      try {
-        const r = await refreshTenantMode(t, mode, requestId);
-        results.push(r);
-      } catch (e) {
-        results.push({ uid, mode, status: "err", message: e.message });
-      }
-    }
-  }
-  return results;
-}
-
-// server/routes/api.internal.cron.refresh.ts
-import crypto5 from "node:crypto";
-function timingSafeEqual(a, b) {
-  if (a.length !== b.length) return false;
-  return crypto5.timingSafeEqual(Buffer.from(a), Buffer.from(b));
-}
-async function presentedSecret(req) {
-  const auth = req.headers.get("authorization") ?? "";
-  const m = auth.match(/^Bearer\s+(.+)$/i);
-  if (m) return m[1].trim();
-  try {
-    const body = await req.json();
-    if (body && typeof body === "object" && !Array.isArray(body)) {
-      const s = body.secret;
-      if (typeof s === "string" && s.length > 0) return s.trim();
-    }
-  } catch {
-  }
-  return null;
-}
-var POST = withRoute(async (req, { requestId }) => {
-  const expected = process.env.INTERNAL_CRON_SECRET;
-  if (!expected) {
-    throw new ApiError("INTERNAL", "cron secret not configured on this instance");
-  }
-  const presented = await presentedSecret(req);
-  if (!presented || !timingSafeEqual(presented, expected)) {
-    throw new ApiError("UNAUTHORIZED", "invalid cron auth");
-  }
-  const results = await refreshAllTenants(requestId);
-  const counts = results.reduce(
-    (acc, r) => ({ ...acc, [r.status]: (acc[r.status] ?? 0) + 1 }),
-    {}
-  );
-  console.log(
-    JSON.stringify({
-      severity: "INFO",
-      msg: "cron.refresh.summary",
-      requestId,
-      counts,
-      total: results.length
-    })
-  );
-  return ok({ total: results.length, counts, results });
-});
-
-// lib/firebase/admin.ts
-import { getApps, initializeApp } from "firebase-admin/app";
-import { getAuth } from "firebase-admin/auth";
-function projectId() {
-  return process.env.FIREBASE_PROJECT_ID ?? process.env.GOOGLE_CLOUD_PROJECT ?? // Last-ditch fallback for local dev before we export the var.
-  "auto-trader-493814";
-}
-var app = null;
-function adminApp() {
-  if (app) return app;
-  if (getApps().length > 0) {
-    app = getApps()[0];
-    return app;
-  }
-  app = initializeApp({ projectId: projectId() });
-  return app;
-}
-function adminAuth() {
-  return getAuth(adminApp());
-}
-
-// lib/auth/session.ts
-async function requireFirebaseUser(req) {
-  const auth = req.headers.get("authorization");
-  const m = auth?.match(/^Bearer\s+(.+)$/i);
-  if (!m) throw new ApiError("UNAUTHORIZED", "Missing ID token");
-  const token = m[1].trim();
-  try {
-    const decoded = await adminAuth().verifyIdToken(token);
-    const email = decoded.email ?? "";
-    const bypassEnabled = process.env.ALLOW_UNVERIFIED_EMAIL === "1" && process.env.NODE_ENV !== "production";
-    if (!decoded.email_verified && !bypassEnabled) {
-      throw new ApiError("FORBIDDEN", "Email not verified");
-    }
-    return {
-      tenant: tenantFromAuthedUid(decoded.uid),
-      email,
-      isAdmin: decoded.isAdmin === true
-    };
-  } catch (e) {
-    if (e instanceof ApiError) throw e;
-    throw new ApiError("UNAUTHORIZED", "Invalid or expired ID token", {
-      context: { err: e.message }
-    });
-  }
-}
-
 // lib/bt/portfolio-key.ts
 var cache = /* @__PURE__ */ new Map();
 function key2(t, mode) {
@@ -1905,6 +1696,70 @@ function evictEvaluationCurrency(t, mode) {
   cache2.delete(cacheKey(t, mode));
 }
 
+// lib/route-handler.ts
+function withRoute(fn) {
+  return async (req, ctx) => {
+    const requestId = newRequestId();
+    const start = Date.now();
+    let status = 200;
+    let errCode;
+    const path = new URL(req.url).pathname;
+    try {
+      const res = await fn(req, { params: ctx.params, requestId });
+      status = res.status;
+      res.headers.set("x-request-id", requestId);
+      return res;
+    } catch (e) {
+      const res = toErrorResponse(e, requestId);
+      status = res.status;
+      errCode = e instanceof ApiError ? e.code : "INTERNAL";
+      console.error(
+        JSON.stringify({
+          severity: e instanceof ApiError && e.status < 500 ? "WARNING" : "ERROR",
+          msg: "route.error",
+          requestId,
+          path,
+          method: req.method,
+          code: errCode,
+          message: e?.message,
+          context: e instanceof ApiError ? e.context : void 0,
+          stack: e instanceof Error && !(e instanceof ApiError) ? e.stack : void 0
+        })
+      );
+      res.headers.set("x-request-id", requestId);
+      return res;
+    } finally {
+      console.log(
+        JSON.stringify({
+          severity: status >= 500 ? "ERROR" : "INFO",
+          msg: "route.access",
+          requestId,
+          path,
+          method: req.method,
+          status,
+          code: errCode,
+          latencyMs: Date.now() - start
+        })
+      );
+    }
+  };
+}
+function ok(data, init = {}) {
+  return json(data, init);
+}
+async function readJsonObject(req) {
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    throw new ApiError("BAD_REQUEST", "Body must be JSON");
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new ApiError("BAD_REQUEST", "Body must be a JSON object");
+  }
+  return body;
+}
+
 // server/routes/api.ui.account.ts
 var GET4 = withRoute(async (req) => {
   const caller = await requireFirebaseUser(req);
@@ -1996,7 +1851,7 @@ function evictMarkets(t, mode) {
 }
 
 // server/routes/api.ui.creds.$mode.ts
-import { defaultNtfyTopic as defaultNtfyTopic3 } from "@bogdanripa/bt-trade";
+import { defaultNtfyTopic as defaultNtfyTopic2 } from "@bogdanripa/bt-trade";
 function parseMode(raw) {
   if (raw !== "demo" && raw !== "live") {
     throw new ApiError("BAD_REQUEST", 'mode must be "demo" or "live"');
@@ -2018,7 +1873,7 @@ var GET5 = withRoute(async (req, { params }) => {
   const doc = await getBtCreds(caller.tenant, mode);
   if (!doc) return ok({ mode, set: false });
   const username = await decrypt(doc.usernameCipher).catch(() => "");
-  const ntfyTopic = username ? defaultNtfyTopic3(username) : null;
+  const ntfyTopic = username ? defaultNtfyTopic2(username) : null;
   return ok({
     mode,
     set: true,
@@ -2408,7 +2263,7 @@ var PATCH = withRoute(async (req, { params, requestId }) => {
 import { z as z3 } from "zod";
 
 // lib/auth/api-key.ts
-import crypto6 from "node:crypto";
+import crypto5 from "node:crypto";
 
 // lib/rate-limit.ts
 var WINDOW_MS = 6e4;
@@ -2437,7 +2292,7 @@ var PREFIX_DEMO = "bvb_demo_";
 var PREFIX_LIVE = "bvb_live_";
 var BASE622 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 function randomBase62(length) {
-  const buf = crypto6.randomBytes(length);
+  const buf = crypto5.randomBytes(length);
   let out = "";
   for (let i = 0; i < length; i++) out += BASE622[buf[i] % 62];
   return out;
@@ -2446,7 +2301,7 @@ function generateApiKey(mode) {
   const prefix = mode === "demo" ? PREFIX_DEMO : PREFIX_LIVE;
   const tail = randomBase62(24);
   const key3 = prefix + tail;
-  const hash = crypto6.createHash("sha256").update(key3).digest("hex");
+  const hash = crypto5.createHash("sha256").update(key3).digest("hex");
   return {
     key: key3,
     hash,
@@ -2462,10 +2317,10 @@ function modeFromKey(raw) {
 }
 function timingSafeEqualStrings(a, b) {
   if (a.length !== b.length) return false;
-  return crypto6.timingSafeEqual(Buffer.from(a), Buffer.from(b));
+  return crypto5.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 function hashKey(raw) {
-  return crypto6.createHash("sha256").update(raw).digest("hex");
+  return crypto5.createHash("sha256").update(raw).digest("hex");
 }
 function extractApiKey(req) {
   const auth = req.headers.get("authorization");
@@ -2533,7 +2388,7 @@ var GET7 = withRoute(async (req) => {
   const rows = keys2.map(({ hash: _hash, ...rest }) => rest);
   return ok({ keys: rows });
 });
-var POST2 = withRoute(async (req, { requestId }) => {
+var POST = withRoute(async (req, { requestId }) => {
   const caller = await requireFirebaseUser(req);
   const parsed = Schema.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
@@ -2675,7 +2530,7 @@ var GET11 = withRoute(async (req) => {
   const user = await getUser(caller.tenant);
   return ok({ email: caller.email, isAdmin: caller.isAdmin, user });
 });
-var POST3 = withRoute(async (req) => {
+var POST2 = withRoute(async (req) => {
   const caller = await requireFirebaseUser(req);
   await upsertUser(caller.tenant, {
     email: caller.email,
@@ -2697,7 +2552,7 @@ var Schema2 = z4.object({
   access: z4.enum(["read", "rw"]),
   keyId: z4.string().min(1).optional()
 });
-var POST4 = withRoute(async (req) => {
+var POST3 = withRoute(async (req) => {
   const caller = await requireFirebaseUser(req);
   const parsed = Schema2.safeParse(await req.json().catch(() => null));
   if (!parsed.success) {
@@ -2867,7 +2722,7 @@ var GET13 = withRoute(async (req) => {
 });
 
 // server/routes/api.ui.telegram.bot.ts
-import crypto7 from "node:crypto";
+import crypto6 from "node:crypto";
 import { z as z5 } from "zod";
 var PutBody = z5.object({
   token: z5.string().trim().min(20, "token is too short").max(200, "token is too long")
@@ -2913,7 +2768,7 @@ var PUT2 = withRoute(async (req) => {
     );
   }
   const existing = await getTelegramBot(caller.tenant);
-  const webhookSecret = existing?.webhookSecret ?? crypto7.randomBytes(24).toString("base64url");
+  const webhookSecret = existing?.webhookSecret ?? crypto6.randomBytes(24).toString("base64url");
   const { ciphertext, keyVersion } = await encrypt(body.token);
   const now2 = (/* @__PURE__ */ new Date()).toISOString();
   await setTelegramBot(caller.tenant, {
@@ -2967,15 +2822,15 @@ var DELETE3 = withRoute(async (req) => {
 });
 
 // server/routes/api.ui.telegram.link-code.ts
-import crypto8 from "node:crypto";
+import crypto7 from "node:crypto";
 var ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 function makeCode(length = 8) {
-  const buf = crypto8.randomBytes(length);
+  const buf = crypto7.randomBytes(length);
   let out = "";
   for (let i = 0; i < length; i++) out += ALPHABET[buf[i] % ALPHABET.length];
   return out;
 }
-var POST5 = withRoute(async (req) => {
+var POST4 = withRoute(async (req) => {
   const caller = await requireFirebaseUser(req);
   const bot = await getTelegramBot(caller.tenant);
   if (!bot) {
@@ -3092,7 +2947,7 @@ var GET16 = withRoute(async (req) => {
 });
 
 // server/routes/api.v1.considered.ts
-var POST6 = withRoute(async (req) => {
+var POST5 = withRoute(async (req) => {
   const caller = await requireApiKey(req);
   assertWriteAccess(caller);
   const record = await readJsonObject(req);
@@ -3111,7 +2966,7 @@ var GET17 = withRoute(async (req) => {
 });
 
 // server/routes/api.v1.fills.ts
-var POST7 = withRoute(async (req) => {
+var POST6 = withRoute(async (req) => {
   const caller = await requireApiKey(req);
   assertWriteAccess(caller);
   const record = await readJsonObject(req);
@@ -3238,7 +3093,7 @@ var GET20 = withRoute(async (req, { params }) => {
 });
 
 // server/routes/api.v1.journal.ts
-var POST8 = withRoute(async (req) => {
+var POST7 = withRoute(async (req) => {
   const caller = await requireApiKey(req);
   assertWriteAccess(caller);
   const record = await readJsonObject(req);
@@ -3349,7 +3204,7 @@ var Schema3 = z6.object({
   side: z6.enum(["buy", "sell"]),
   type: z6.enum(["limit", "market"]).default("limit")
 });
-var POST9 = withRoute(async (req) => {
+var POST8 = withRoute(async (req) => {
   const caller = await requireApiKey(req);
   const body = await req.json().catch(() => null);
   const parsed = Schema3.safeParse(body);
@@ -3403,7 +3258,7 @@ var PlaceSchema = z7.object({
   type: z7.enum(["limit", "market"]).default("limit"),
   valability: z7.enum(["day", "gtc"]).default("day")
 });
-var POST10 = withRoute(async (req, { requestId }) => {
+var POST9 = withRoute(async (req, { requestId }) => {
   const caller = await requireApiKey(req);
   assertWriteAccess(caller);
   const body = await req.json().catch(() => null);
@@ -3520,7 +3375,7 @@ var GET24 = withRoute(async (req) => {
 });
 
 // server/routes/api.v1.session.refresh.ts
-var POST11 = withRoute(async (req, { requestId }) => {
+var POST10 = withRoute(async (req, { requestId }) => {
   const caller = await requireApiKey(req);
   const client = await getBtClient(caller.tenant, caller.mode, { interactive: false });
   try {
@@ -3598,7 +3453,7 @@ var PUT4 = withRoute(async (req) => {
 
 // server/routes/api.v1.telegram.webhook.$secret.ts
 var okAck = () => json({ ok: true });
-var POST12 = withRoute(async (req, { params, requestId }) => {
+var POST11 = withRoute(async (req, { params, requestId }) => {
   if (!params.secret) {
     console.warn(
       JSON.stringify({
@@ -4060,13 +3915,13 @@ async function handle(req) {
   }
 }
 var GET28 = handle;
-var POST13 = handle;
+var POST12 = handle;
 
 // server/routes/oauth.register.ts
 function clientError(error, description, status = 400) {
   return json({ error, error_description: description }, { status });
 }
-async function POST14(req) {
+async function POST13(req) {
   let body;
   try {
     body = await req.json();
@@ -4148,7 +4003,7 @@ async function POST14(req) {
 }
 
 // server/routes/oauth.revoke.ts
-import crypto9 from "node:crypto";
+import crypto8 from "node:crypto";
 async function parseBody(req) {
   const ct = (req.headers.get("content-type") ?? "").toLowerCase();
   if (ct.includes("application/x-www-form-urlencoded")) {
@@ -4168,12 +4023,12 @@ async function parseBody(req) {
   }
   return null;
 }
-async function POST15(req) {
+async function POST14(req) {
   const params = await parseBody(req);
   const raw = params?.get("token")?.trim() ?? "";
   if (raw) {
     try {
-      const hash = crypto9.createHash("sha256").update(raw).digest("hex");
+      const hash = crypto8.createHash("sha256").update(raw).digest("hex");
       const found = await findApiKeyByHash(hash);
       if (found && !found.revokedAt) {
         const tenant = tenantFromAuthedUid(found.uid);
@@ -4233,7 +4088,7 @@ async function parseBody2(req) {
   }
   return null;
 }
-async function POST16(req) {
+async function POST15(req) {
   const params = await parseBody2(req);
   if (!params) return err("invalid_request", "Body must be form-encoded or JSON");
   const grantType = params.get("grant_type");
@@ -4339,7 +4194,6 @@ function buildRouter() {
   r.add("GET", "/.well-known/oauth-authorization-server", GET);
   r.add("GET", "/.well-known/oauth-protected-resource", GET2);
   r.add("GET", "/api/health", GET3);
-  r.add("POST", "/api/internal/cron/refresh", POST);
   r.add("GET", "/api/ui/account", GET4);
   r.add("GET", "/api/ui/creds/:mode", GET5);
   r.add("PUT", "/api/ui/creds/:mode", PUT);
@@ -4348,47 +4202,47 @@ function buildRouter() {
   r.add("PATCH", "/api/ui/keys/:id", PATCH);
   r.add("DELETE", "/api/ui/keys/:id", DELETE2);
   r.add("GET", "/api/ui/keys", GET7);
-  r.add("POST", "/api/ui/keys", POST2);
+  r.add("POST", "/api/ui/keys", POST);
   r.add("GET", "/api/ui/lookup/currencies", GET8);
   r.add("GET", "/api/ui/lookup/instruments", GET9);
   r.add("GET", "/api/ui/lookup/markets", GET10);
   r.add("GET", "/api/ui/me", GET11);
-  r.add("POST", "/api/ui/me", POST3);
-  r.add("POST", "/api/ui/oauth/consent", POST4);
+  r.add("POST", "/api/ui/me", POST2);
+  r.add("POST", "/api/ui/oauth/consent", POST3);
   r.add("GET", "/api/ui/oauth/context", GET12);
   r.add("GET", "/api/ui/sessions", GET13);
   r.add("GET", "/api/ui/telegram/bot", GET14);
   r.add("PUT", "/api/ui/telegram/bot", PUT2);
   r.add("DELETE", "/api/ui/telegram/bot", DELETE3);
-  r.add("POST", "/api/ui/telegram/link-code", POST5);
+  r.add("POST", "/api/ui/telegram/link-code", POST4);
   r.add("GET", "/api/ui/telegram", GET15);
   r.add("DELETE", "/api/ui/telegram", DELETE4);
   r.add("GET", "/api/v1/cash", GET16);
   r.add("GET", "/api/v1/considered", GET17);
-  r.add("POST", "/api/v1/considered", POST6);
+  r.add("POST", "/api/v1/considered", POST5);
   r.add("GET", "/api/v1/fills", GET18);
-  r.add("POST", "/api/v1/fills", POST7);
+  r.add("POST", "/api/v1/fills", POST6);
   r.add("GET", "/api/v1/holdings", GET19);
   r.add("GET", "/api/v1/instruments/:symbol", GET20);
   r.add("GET", "/api/v1/journal", GET21);
-  r.add("POST", "/api/v1/journal", POST8);
+  r.add("POST", "/api/v1/journal", POST7);
   r.add("GET", "/api/v1/markets", GET22);
   r.add("GET", "/api/v1/orders/:id", GET23);
-  r.add("POST", "/api/v1/orders/preview", POST9);
+  r.add("POST", "/api/v1/orders/preview", POST8);
   r.add("GET", "/api/v1/orders", GET24);
-  r.add("POST", "/api/v1/orders", POST10);
-  r.add("POST", "/api/v1/session/refresh", POST11);
+  r.add("POST", "/api/v1/orders", POST9);
+  r.add("POST", "/api/v1/session/refresh", POST10);
   r.add("GET", "/api/v1/snapshots/:date", GET25);
   r.add("PUT", "/api/v1/snapshots/:date", PUT3);
   r.add("GET", "/api/v1/snapshots", GET26);
   r.add("GET", "/api/v1/state/portfolio", GET27);
   r.add("PUT", "/api/v1/state/portfolio", PUT4);
-  r.add("POST", "/api/v1/telegram/webhook/:secret", POST12);
+  r.add("POST", "/api/v1/telegram/webhook/:secret", POST11);
   r.add("GET", "/mcp", GET28);
-  r.add("POST", "/mcp", POST13);
-  r.add("POST", "/oauth/register", POST14);
-  r.add("POST", "/oauth/revoke", POST15);
-  r.add("POST", "/oauth/token", POST16);
+  r.add("POST", "/mcp", POST12);
+  r.add("POST", "/oauth/register", POST13);
+  r.add("POST", "/oauth/revoke", POST14);
+  r.add("POST", "/oauth/token", POST15);
   return r;
 }
 

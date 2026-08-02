@@ -6,7 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Multi-tenant HTTP gateway in front of [BT Trade](https://bt-trade.ro) (Banca Transilvania's retail trading platform). The whole reason it exists: BT pins session refresh tokens to the IP that issued them, so the service needs one long-lived identity with a stable egress address to keep refresh tokens alive.
 
-It runs as a **single always-warm container on a self-hosted Raspberry Pi** (Coolify, managed through the Pironman tooling), served at **https://bt-gateway-coolify.bogdanripa.com**, with a Postgres database attached on the same internal Docker network. The single-instance shape is **load-bearing** twice over: the BT sign-in single-login guard (`loginInProgress` in `lib/bt/client-pool.ts`) is in-memory, so a second instance would let two logins fire at once and email the user duplicate, mutually-invalidating OTP codes; and the BT client pool itself is in-memory, so `sleep_when_idle` must stay **off** or every idle period throws away warm sessions.
+It runs as a container on a self-hosted Raspberry Pi (Coolify, managed through the Pironman tooling), served at **https://bt-gateway-coolify.bogdanripa.com**, with a Postgres database attached on the same internal Docker network.
+
+**The container is disposable.** `sleep_when_idle` is on: it scales to zero when idle and the first request afterwards waits a few seconds while it starts. Nothing of consequence lives in the process. Every BT session snapshot is written to `bt_sessions` on each token rotation (`onSessionChange`) and restored on the next build (`client.restore`), so a cold start resumes the session rather than prompting for an OTP. There is no refresh cron — sessions are re-authenticated on demand, driven by the transport's 401-retry, and a session BT has genuinely expired surfaces as `SESSION_EXPIRED` (503) for the user to re-auth.
+
+Everything else held in a module-level `Map` — the BT client pool, `getPortfolioKey`, the markets and evaluation-currency caches, the rate-limit buckets — is a **cache over the database or over BT**, and is expected to be lost. Losing it costs one extra upstream call, never correctness. The one exception worth knowing is the rate limiter: its window resets whenever the container starts, which is intended (it exists to stop a runaway loop hammering BT, not to enforce a quota).
+
+Still true: only **one instance at a time**. The sign-in single-login guard (`loginInProgress` in `lib/bt/client-pool.ts`) is a process-local `Set`, so two concurrent instances would each fire their own 2FA and email the user colliding OTP codes. Scale-to-zero is safe because the platform runs one container; horizontal scaling would not be.
 
 Two-sided product:
 
@@ -48,7 +54,6 @@ Deploys happen automatically via `.github/workflows/deploy.yml` on push to `main
 ```
 API client (bvb_... key)  ──► /api/v1/*  ──► requireApiKey ──► BTTradeClient (pooled) ──► bt-trade.ro
 Browser (Firebase ID tok) ──► /api/ui/*  ──► requireFirebaseUser ──► Postgres / secret-box / BTTradeClient
-Platform cron             ──► /api/internal/cron/refresh ──► refreshAllTenants
 Telegram (webhook)        ──► /api/v1/telegram/webhook/:secret ──► findTelegramBotByWebhookSecret
 ```
 
@@ -88,7 +93,7 @@ const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
 
 ### BT client pool (`lib/bt/client-pool.ts`)
 
-One `BTTradeClient` per `(uid, mode)` kept in a process-local `Map` on the always-warm instance, guarded by a per-key in-flight promise so concurrent first-requests share one build. Lifecycle:
+One `BTTradeClient` per `(uid, mode)` kept in a process-local `Map`, guarded by a per-key in-flight promise so concurrent first-requests share one build. The `Map` is a cache: the authoritative session lives in `bt_sessions`, so an empty pool after a cold start costs a `restore()`, not a login. Lifecycle:
 
 1. Read encrypted `BtCredsDoc`, decrypt username+password.
 2. Try to `restore()` from the persisted `BtSessionDoc` snapshot — skips OTP.
@@ -96,9 +101,9 @@ One `BTTradeClient` per `(uid, mode)` kept in a process-local `Map` on the alway
 4. `onSessionChange` hook persists every token rotation back to `bt_sessions`.
 5. `onExpired` hook audits `signin.failure`, sends Telegram alert, evicts from pool.
 
-**Telegram notification policy**: sign-in success/failure and refresh failure alert. Routine `refresh.success` does NOT Telegram (user rule: "don't message me every 45 minutes") — only the audit feed records it. The 30-min platform cron hits `/api/internal/cron/refresh`, walks `listActiveTenantUids()` × `['demo','live']`, runs `refreshTenantMode` which uses a throwaway client and `client.auth.refresh()` — it never prompts for OTP. On refresh failure the snapshot is deleted and the pool entry evicted so the next user-initiated call triggers a fresh login.
+**Telegram notification policy**: sign-in success/failure and refresh failure alert. Routine `refresh.success` does NOT Telegram (user rule: "don't message me every 45 minutes") — only the audit feed records it.
 
-The cron route accepts its shared secret **either** as `Authorization: Bearer <INTERNAL_CRON_SECRET>` **or** as `{"secret": "..."}` in the JSON body. The platform scheduler sends a method, a path and a body but cannot attach a header, hence the second path. The body is deliberately preferred over a `?secret=` query parameter, which would land in the edge proxy's access log.
+**There is no refresh cron.** It was removed along with `lib/bt/refresh.ts` and `/api/internal/cron/refresh`: with the container scaling to zero there is nothing to keep warm between requests, and a scheduled sweep would only defeat the point by waking it every half hour. Tokens are refreshed lazily by the transport's 401-retry and by `POST /api/v1/session/refresh`; when BT has genuinely expired the session, `onExpired` deletes the snapshot, evicts the pool entry and alerts over Telegram, and the next user-initiated call performs a full OTP login.
 
 `getPortfolioKey` is separately cached in-memory per `(uid, mode)` — it calls `client.accounts.list()` and picks `selected` → `allowTrading` → first.
 
@@ -141,7 +146,7 @@ The three record streams sort on a value extracted from the JSON payload into a 
 - **`/api/health` must not depend on the database.** It is the container healthcheck and the deploy's readiness gate; making it touch Postgres turns a transient database blip into a rolled-back deploy.
 - **The SPA must not claim `/api/*`.** The static host serves any path in the bundle and forwards the rest to the container, so a bundled `/api` path would shadow the API. `web/src/App.tsx` routes only UI paths; its catch-all redirects home rather than rendering a 404, because genuinely unknown paths never reach the SPA.
 - **Firebase web config is build-time** (`web/.env.production`, `VITE_FIREBASE_*`). It is public by design — `apiKey` is a quota identifier, not a credential — which is why it can be committed. This is what removed the need for a server-rendered config `<script>`, and with it the last reason the UI needed a server.
-- **Dockerfile invariants** (documented at the top of that file, all four load-bearing): port 80, dual-stack `HOSTNAME="::"`, no `USER` line, and a `HEALTHCHECK` on `/api/health` with curl installed. Breaking any of them fails the deploy in a way that looks unrelated to the change.
+- **Dockerfile invariants** (documented at the top of that file, all four load-bearing): port 80, dual-stack `HOST="::"`, no `USER` line, and a `HEALTHCHECK` on `/api/health` with curl installed. Breaking any of them fails the deploy in a way that looks unrelated to the change.
 
 ## Useful env vars
 
@@ -153,7 +158,6 @@ The three record streams sort on a value extracted from the JSON payload into a 
 | `FIREBASE_PROJECT_ID` | Firebase project (`auto-trader-493814`) |
 | `BT_GATEWAY_COMMIT` | git SHA, passed as a build arg by CI; surfaced by `/api/health` |
 | `BT_CLIENT_DEBUG=1` | verbose bt-trade logs to stdout |
-| `INTERNAL_CRON_SECRET` | required for `/api/internal/cron/refresh` |
 | `BT_GATEWAY_PUBLIC_URL` | canonical public origin; used for OAuth metadata + the Telegram webhook URL. Set it in prod rather than trusting proxy headers |
 | `ALLOW_UNVERIFIED_EMAIL=1` | only for local debugging; never set in prod |
 
@@ -163,7 +167,6 @@ The three record streams sort on a value extracted from the JSON payload into a 
 - New UI-backed endpoint → copy `server/routes/api.ui.keys.ts` (auth via `requireFirebaseUser`).
 - New UI page → add a route in `web/src/App.tsx`; components live in `web/src/components/`.
 - New persisted data type → add the `Doc` interface + typed accessors in `lib/store.ts`, and the table in the `SCHEMA` constant in `lib/db.ts`; never access tables ad-hoc.
-- Cron job expansion → extend `lib/bt/refresh.ts` and the single cron route in `app/api/internal/cron/refresh/route.ts`.
 - Reading production logs → `/check-logs`.
 - Docs: `docs/telegram.md` (per-user bot setup), `docs/ios-shortcuts.md` (client examples).
 - The one-shot GCP export lives in `scripts/migrate-to-postgres.mjs`; it is historical and should not need running again.

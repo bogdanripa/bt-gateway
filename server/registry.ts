@@ -13,7 +13,6 @@ import { Router, type Handler } from './router';
 import * as _well_known_oauth_authorization_server from './routes/well-known.oauth-authorization-server';
 import * as _well_known_oauth_protected_resource from './routes/well-known.oauth-protected-resource';
 import * as api_health from './routes/api.health';
-import * as api_internal_cron_refresh from './routes/api.internal.cron.refresh';
 import * as api_ui_account from './routes/api.ui.account';
 import * as api_ui_creds__mode from './routes/api.ui.creds.$mode';
 import * as api_ui_events from './routes/api.ui.events';
@@ -54,7 +53,6 @@ export function buildRouter(): Router {
   r.add('GET', '/.well-known/oauth-authorization-server', _well_known_oauth_authorization_server.GET as Handler);
   r.add('GET', '/.well-known/oauth-protected-resource', _well_known_oauth_protected_resource.GET as Handler);
   r.add('GET', '/api/health', api_health.GET as Handler);
-  r.add('POST', '/api/internal/cron/refresh', api_internal_cron_refresh.POST as Handler);
   r.add('GET', '/api/ui/account', api_ui_account.GET as Handler);
   r.add('GET', '/api/ui/creds/:mode', api_ui_creds__mode.GET as Handler);
   r.add('PUT', '/api/ui/creds/:mode', api_ui_creds__mode.PUT as Handler);
