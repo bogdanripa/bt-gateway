@@ -7,29 +7,23 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start -p ${PORT:-8080}",
-    "lint": "next lint",
+    "dev": "node --watch --experimental-strip-types server/index.ts",
+    "build": "node scripts/build.mjs",
+    "start": "node dist/server.js",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@bogdanripa/bt-trade": "^0.3.1",
     "firebase": "^10.14.1",
     "firebase-admin": "^12.6.0",
-    "next": "^15.0.3",
     "pg": "^8.22.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^22.8.6",
     "@types/pg": "^8.20.3",
-    "@types/react": "^18.3.12",
-    "@types/react-dom": "^18.3.1",
-    "eslint": "^9.14.0",
-    "eslint-config-next": "^15.0.3",
+    "esbuild": "^0.28.1",
     "typescript": "^5.6.3"
-  }
+  },
+  "type": "module"
 }
