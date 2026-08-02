@@ -31,7 +31,6 @@
  * Run instance. On eviction the next call re-resolves from scratch.
  */
 
-import 'server-only';
 import { ApiError } from '../errors';
 import type { BTTradeClient } from '@bogdanripa/bt-trade';
 import type { BtMode, TenantRef } from '../store';

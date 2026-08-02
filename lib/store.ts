@@ -23,7 +23,6 @@
  * document without the orderBy field simply does not appear in the query.
  */
 
-import 'server-only';
 import crypto from 'node:crypto';
 import { q, q1 } from './db';
 

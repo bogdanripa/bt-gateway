@@ -21,7 +21,6 @@
  * would be tidier but would silently change how mixed-offset legacy rows sort.
  */
 
-import 'server-only';
 import { Pool, type PoolClient, type QueryResultRow } from 'pg';
 
 let poolInstance: Pool | null = null;

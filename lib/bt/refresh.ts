@@ -14,7 +14,6 @@
  *     user-initiated API call retries via full login.
  */
 
-import 'server-only';
 import { BTTradeClient, ntfyOtpProvider, defaultNtfyTopic, type SessionSnapshot } from '@bogdanripa/bt-trade';
 import {
   getBtCreds,

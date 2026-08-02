@@ -12,7 +12,6 @@
  * Dockerfile + GitHub Actions.
  */
 
-import 'server-only';
 
 export interface FirebaseClientConfig {
   apiKey: string;

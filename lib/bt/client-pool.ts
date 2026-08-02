@@ -29,7 +29,6 @@
  * and the rest await the same result.
  */
 
-import 'server-only';
 import {
   BTTradeClient,
   ntfyOtpProvider,

@@ -36,7 +36,6 @@
  * a wrong key fails the tag check rather than returning garbage.
  */
 
-import 'server-only';
 import crypto from 'node:crypto';
 
 const VERSION = 1;

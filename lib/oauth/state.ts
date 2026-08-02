@@ -12,7 +12,6 @@
  * that bearer the same way every other `/api/v1/*` consumer does.
  */
 
-import 'server-only';
 import crypto from 'node:crypto';
 
 /** How long an authorization code stays valid before consumeOauthCode rejects it. */

@@ -12,7 +12,6 @@
  * We only surface the fields we actually need downstream.
  */
 
-import 'server-only';
 import type { BTTradeClient } from '@bogdanripa/bt-trade';
 import { ApiError } from '../errors';
 

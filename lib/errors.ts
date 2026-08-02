@@ -13,7 +13,6 @@
  * correlate a user-facing error with a log entry.
  */
 
-import { NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 
 export type ApiErrorCode =
@@ -62,19 +61,25 @@ export function newRequestId(): string {
   return crypto.randomBytes(12).toString('base64url');
 }
 
-export function toErrorResponse(
-  err: unknown,
-  requestId: string,
-): NextResponse {
+/** JSON response helper — the one place the envelope's content type is set. */
+export function json(body: unknown, init: ResponseInit = {}): Response {
+  const headers = new Headers(init.headers);
+  if (!headers.has('content-type')) {
+    headers.set('content-type', 'application/json; charset=utf-8');
+  }
+  return new Response(JSON.stringify(body), { ...init, headers });
+}
+
+export function toErrorResponse(err: unknown, requestId: string): Response {
   if (err instanceof ApiError) {
-    return NextResponse.json(
+    return json(
       { error: { code: err.code, message: err.message, requestId } },
       { status: err.status },
     );
   }
   // Non-ApiError: do not leak .message to callers. Log it (caller's
   // responsibility — they have the request ID) and return a generic envelope.
-  return NextResponse.json(
+  return json(
     { error: { code: 'INTERNAL', message: 'Internal error', requestId } },
     { status: 500 },
   );

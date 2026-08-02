@@ -1,5 +1,5 @@
 /**
- * Shared wrapper for `/api/v1/*` route handlers.
+ * Shared wrapper for API route handlers.
  *
  * Responsibilities:
  *   - Assign a requestId up front so every log line in this request shares it.
@@ -9,28 +9,30 @@
  *
  * Route handlers should throw `ApiError` on any failure. Non-ApiError throws
  * get flattened to INTERNAL with the real message in the log only.
+ *
+ * Everything here is Web-standard `Request`/`Response` (built into Node 20 via
+ * undici), so handlers stay framework-agnostic — this used to sit on
+ * NextRequest/NextResponse, and the contract deliberately did not change when
+ * Next.js came out.
  */
 
-import 'server-only';
-import { NextResponse, type NextRequest } from 'next/server';
-import { ApiError, newRequestId, toErrorResponse } from './errors';
+import { ApiError, json, newRequestId, toErrorResponse } from './errors';
 
 export type RouteFn<P = unknown> = (
-  req: NextRequest,
+  req: Request,
   ctx: { params: P; requestId: string },
-) => Promise<NextResponse | Response> | NextResponse | Response;
+) => Promise<Response> | Response;
 
 export function withRoute<P = unknown>(fn: RouteFn<P>) {
-  return async (req: NextRequest, nextCtx: { params: Promise<P> }): Promise<Response> => {
+  return async (req: Request, ctx: { params: P }): Promise<Response> => {
     const requestId = newRequestId();
     const start = Date.now();
     let status = 200;
     let errCode: string | undefined;
+    const path = new URL(req.url).pathname;
 
     try {
-      // Next 15 gives params as a Promise in route handlers.
-      const params = await nextCtx.params;
-      const res = await fn(req, { params, requestId });
+      const res = await fn(req, { params: ctx.params, requestId });
       status = res.status;
       // Add requestId to the response so clients can correlate.
       res.headers.set('x-request-id', requestId);
@@ -44,7 +46,7 @@ export function withRoute<P = unknown>(fn: RouteFn<P>) {
           severity: e instanceof ApiError && e.status < 500 ? 'WARNING' : 'ERROR',
           msg: 'route.error',
           requestId,
-          path: req.nextUrl.pathname,
+          path,
           method: req.method,
           code: errCode,
           message: (e as Error)?.message,
@@ -60,7 +62,7 @@ export function withRoute<P = unknown>(fn: RouteFn<P>) {
           severity: status >= 500 ? 'ERROR' : 'INFO',
           msg: 'route.access',
           requestId,
-          path: req.nextUrl.pathname,
+          path,
           method: req.method,
           status,
           code: errCode,
@@ -72,10 +74,10 @@ export function withRoute<P = unknown>(fn: RouteFn<P>) {
 }
 
 /**
- * Helper for 204-ish JSON responses: `ok({ foo: 1 })` → status 200 JSON.
+ * Helper for JSON responses: `ok({ foo: 1 })` → status 200 JSON.
  */
-export function ok(data: unknown, init: ResponseInit = {}): NextResponse {
-  return NextResponse.json(data, init);
+export function ok(data: unknown, init: ResponseInit = {}): Response {
+  return json(data, init);
 }
 
 /**

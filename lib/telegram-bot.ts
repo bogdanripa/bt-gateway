@@ -13,7 +13,6 @@
  * flood us).
  */
 
-import 'server-only';
 
 export async function sendMessageWithToken(
   botToken: string,

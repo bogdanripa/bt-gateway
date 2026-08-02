@@ -15,7 +15,6 @@
  * the upstream broker from runaway loops, not strictly enforcing a quota.
  */
 
-import 'server-only';
 
 const WINDOW_MS = 60_000;
 const DEFAULT_MAX = 60;

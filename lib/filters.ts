@@ -25,7 +25,6 @@
  * is strict: if the caller supplied a symbol/market/currency, it must pass.
  */
 
-import 'server-only';
 import { ApiError } from './errors';
 import type { ApiKeyFilters, FilterAxis } from './store';
 

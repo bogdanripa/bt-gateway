@@ -14,7 +14,6 @@
  * concurrent callers so we only hit BT once on cold start.
  */
 
-import 'server-only';
 import type { BTTradeClient } from '@bogdanripa/bt-trade';
 import type { BtMode, TenantRef } from '../store';
 

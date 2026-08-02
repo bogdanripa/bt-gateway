@@ -20,7 +20,6 @@
  * `isAdmin` is read from the verified token's claims, and is set out-of-band.
  */
 
-import 'server-only';
 import { cert, getApps, initializeApp, type App } from 'firebase-admin/app';
 import { getAuth, type Auth } from 'firebase-admin/auth';
 

@@ -10,8 +10,6 @@
  * ApiError on any verification failure.
  */
 
-import 'server-only';
-import type { NextRequest } from 'next/server';
 import { ApiError } from '../errors';
 import { adminAuth } from '../firebase/admin';
 import { tenantFromAuthedUid, type TenantRef } from '../store';
@@ -22,7 +20,7 @@ export interface UiCaller {
   isAdmin: boolean;
 }
 
-export async function requireFirebaseUser(req: NextRequest): Promise<UiCaller> {
+export async function requireFirebaseUser(req: Request): Promise<UiCaller> {
   const auth = req.headers.get('authorization');
   const m = auth?.match(/^Bearer\s+(.+)$/i);
   if (!m) throw new ApiError('UNAUTHORIZED', 'Missing ID token');
@@ -53,7 +51,7 @@ export async function requireFirebaseUser(req: NextRequest): Promise<UiCaller> {
   }
 }
 
-export async function requireAdmin(req: NextRequest): Promise<UiCaller> {
+export async function requireAdmin(req: Request): Promise<UiCaller> {
   const caller = await requireFirebaseUser(req);
   if (!caller.isAdmin) throw new ApiError('FORBIDDEN', 'Admin access required');
   return caller;

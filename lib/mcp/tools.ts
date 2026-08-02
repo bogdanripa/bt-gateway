@@ -14,7 +14,6 @@
  * reject anything malformed with a clear error.
  */
 
-import 'server-only';
 
 export interface McpTool {
   name: string;

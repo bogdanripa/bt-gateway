@@ -14,7 +14,6 @@
  * changes their primary trading account day-to-day.
  */
 
-import 'server-only';
 import { ApiError } from '../errors';
 import type { BTTradeClient } from '@bogdanripa/bt-trade';
 import type { BtMode, TenantRef } from '../store';

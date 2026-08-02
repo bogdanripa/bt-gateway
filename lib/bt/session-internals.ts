@@ -7,7 +7,6 @@
  * BTTradeClient instance, pool-owned or throwaway.
  */
 
-import 'server-only';
 import { AuthError, type BTTradeClient } from '@bogdanripa/bt-trade';
 import type { BtMode } from '../store';
 

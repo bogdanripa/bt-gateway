@@ -15,7 +15,6 @@
  * information via response-time differences.
  */
 
-import 'server-only';
 import crypto from 'node:crypto';
 import { ApiError } from '../errors';
 import {
@@ -28,7 +27,6 @@ import {
   tenantFromAuthedUid,
 } from '../store';
 import { checkRateLimit } from '../rate-limit';
-import type { NextRequest } from 'next/server';
 
 const PREFIX_DEMO = 'bvb_demo_';
 const PREFIX_LIVE = 'bvb_live_';
@@ -75,7 +73,7 @@ function hashKey(raw: string): string {
  * Parse `Authorization: Bearer <key>` (or `X-Api-Key`) and return the raw key.
  * Returns null if absent.
  */
-export function extractApiKey(req: NextRequest): string | null {
+export function extractApiKey(req: Request): string | null {
   const auth = req.headers.get('authorization');
   if (auth) {
     const m = auth.match(/^Bearer\s+(.+)$/i);
@@ -156,7 +154,7 @@ function finalizeAuth(
  * Extract + authenticate in one step. Use this at the top of every
  * `/api/v1/*` route handler.
  */
-export async function requireApiKey(req: NextRequest): Promise<AuthenticatedCaller> {
+export async function requireApiKey(req: Request): Promise<AuthenticatedCaller> {
   const raw = extractApiKey(req);
   if (!raw) throw new ApiError('UNAUTHORIZED', 'Missing API key');
   return authenticateApiKey(raw);

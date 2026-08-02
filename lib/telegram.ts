@@ -12,7 +12,6 @@
  * the audit UI; Telegram is reserved for "you need to do something" signals.
  */
 
-import 'server-only';
 import { getTelegramBot, getTelegramLink, type TenantRef } from './store';
 import { decrypt } from './secret-box';
 import { sendMessageWithToken } from './telegram-bot';

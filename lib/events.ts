@@ -10,7 +10,6 @@
  * `requestId` or `uid`.
  */
 
-import 'server-only';
 import { appendEvent, type EventDoc, type TenantRef } from './store';
 
 type AppendArgs = {
