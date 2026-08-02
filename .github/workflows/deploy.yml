@@ -41,6 +41,8 @@ jobs:
         with:
           platforms: linux/arm64
           push: true
+          build-args: |
+            GIT_SHA=${{ github.sha }}
           tags: |
             ghcr.io/bogdanripa/bt-gateway:latest
             ghcr.io/bogdanripa/bt-gateway:${{ steps.tag.outputs.value }}
@@ -106,3 +108,35 @@ jobs:
           echo "(check: apps_logs bt-gateway) or the app does not serve"
           echo "/api/health; fix the route or change health_path"
           exit 1
+
+  # The UI is a static bundle served by the platform's frontend host — no
+  # container, no cold start, and a deploy is a ~1s upload. It ships
+  # independently of the backend on purpose: a marketing copy change must not
+  # rebuild an arm64 image under QEMU.
+  #
+  # Requests resolve with one rule and nothing to configure: a path present in
+  # this bundle is served from here, everything else goes to the backend. That
+  # is why /api/* must not exist in the bundle.
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - run: npm ci
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+
+      # index.html must sit at the zip's root.
+      - name: Package the bundle
+        run: cd web/dist && zip -qr "$GITHUB_WORKSPACE/site.zip" .
+
+      - name: Upload the frontend
+        run: |
+          curl -fsS -X PUT \
+            -H "Authorization: Bearer ${{ secrets.PAAS_KEY }}" \
+            --data-binary @site.zip \
+            "https://api-coolify.bogdanripa.com/apps/bt-gateway/frontend"

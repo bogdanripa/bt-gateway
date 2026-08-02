@@ -95,8 +95,8 @@ client-side error with the container logs.
 Trading routines ──────┐
                        │  API key (bvb_demo_… / bvb_live_…)
                        ▼
-Browser (UI) ──────► bt-gateway container (Next.js: API routes + pages)
-  (Firebase Auth)      │   on the Pi, behind Coolify + the edge proxy
+Browser (UI) ──────► static SPA on the platform's frontend host (no container)
+  (Firebase Auth)      │        └─ /api/* forwarded ─► bt-gateway container on the Pi
                        │          ├── per-tenant BT client pool (in-memory)
                        │          ├── Postgres (the app's own database)
                        │          │    users                (tenant profile)
@@ -312,6 +312,16 @@ components/
   auth/                 AuthProvider, AuthGate (Firebase client)
   settings/             CredsCard, ApiKeysCard, TelegramCard
   AuditFeed.tsx, Nav.tsx
+server/
+  index.ts              entrypoint; node:http, no framework
+  http.ts               IncomingMessage <-> Request/Response bridge
+  router.ts             :param matcher, static beats dynamic
+  registry.ts           the route table
+  routes/               38 handlers, one file per endpoint
+web/
+  src/App.tsx           SPA route table
+  src/components/       ported unchanged from the Next tree
+  src/pages/            marketing + console pages
 lib/
   auth/                 requireApiKey, requireFirebaseUser, requireAdmin
   bt/                   client-pool.ts, portfolio-key.ts, bt-trade .d.ts
@@ -325,7 +335,7 @@ lib/
   errors.ts, route-handler.ts
 scripts/
   migrate-to-postgres.mjs   one-shot Firestore/KMS -> Postgres export
-Dockerfile              multi-stage Node 20 Alpine, arm64, standalone output
+Dockerfile              multi-stage Node 20 Alpine, arm64, API server only
 .github/workflows/
   deploy.yml            build arm64 image + push to ghcr + redeploy on the Pi
 ```

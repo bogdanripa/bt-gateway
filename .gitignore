@@ -36,3 +36,8 @@ next-env.d.ts
 
 # Migration output — contains re-encrypted credentials
 migration-sql/
+
+# Build output
+dist/
+web/dist/
+web/node_modules/

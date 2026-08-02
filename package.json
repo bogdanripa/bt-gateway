@@ -14,7 +14,6 @@
   },
   "dependencies": {
     "@bogdanripa/bt-trade": "^0.3.1",
-    "firebase": "^10.14.1",
     "firebase-admin": "^12.6.0",
     "pg": "^8.22.0",
     "zod": "^3.23.8"

@@ -1,10 +1,13 @@
-# Keep the build context small and deterministic.
+# Keep the build context small and deterministic. The image is the API server
+# only — the UI bundle (web/) is uploaded to the static host by CI and has no
+# business in here.
 .git
 .github
-.next
 node_modules
+web
+dist
+migration-sql
 npm-debug.log*
 .DS_Store
 .env*
 *.md
-infra/

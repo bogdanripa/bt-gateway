@@ -11,9 +11,11 @@ It runs as a **single always-warm container on a self-hosted Raspberry Pi** (Coo
 Two-sided product:
 
 - **`/api/v1/*`** — REST API authenticated by API keys (`Authorization: Bearer bvb_<mode>_<24 chars>`) for trading bots, scripts, iOS Shortcuts.
-- **`/api/ui/*` + pages** — Next.js web UI authenticated by Firebase ID tokens (Google sign-in) for managing credentials, API keys, Telegram, and viewing the audit feed.
+- **`/api/ui/*`** — the same server, authenticated by Firebase ID tokens (Google sign-in), backing the console UI.
 
-Both halves are served by the same container. There is no separate static frontend: `output: 'standalone'` means the pages are server-rendered by the same Node process that answers `/api/*`, and `app/layout.tsx` is `force-dynamic` because it inlines the Firebase Web config from env into the HTML at request time.
+**The two halves deploy separately.** The container (`server/`) is a plain Node HTTP server that only ever emits JSON — no framework, no HTML, ~144 kB bundled. The UI (`web/`) is a Vite + React SPA uploaded to the platform's static frontend host, which serves any path present in the bundle and forwards everything else to the container. That rule is the whole routing contract: **`/api/*` must never exist in the bundle.**
+
+This replaced Next.js, which was shipping a React SSR runtime to serve what is, on the server side, only JSON. A marketing copy change is now a ~1 s upload instead of an arm64 image rebuild under QEMU.
 
 ### What is still on GCP
 
@@ -23,11 +25,15 @@ Only **Firebase Auth**, and only for verifying ID tokens. `lib/firebase/admin.ts
 
 ```bash
 npm install
-npm run dev          # next dev at http://localhost:3000
-npm run build        # next build (produces .next/standalone)
-npm run start        # next start -p ${PORT:-8080}
-npm run typecheck    # tsc --noEmit
+npm run build        # esbuild -> dist/server.js (one ESM file)
+npm run start        # node dist/server.js
+npm run typecheck    # tsc --noEmit  (scoped to lib/ + server/)
+
+cd web && npm run dev     # Vite at :3000, proxies /api to :8080
+cd web && npm run build   # -> web/dist, the bundle CI uploads
 ```
+
+The server bundles with esbuild rather than plain `tsc` because `@bogdanripa/bt-trade` is ESM-only while `firebase-admin` and `pg` are CommonJS: the output has to be ESM, and ESM would otherwise demand explicit `.js` extensions on every relative import across ~60 files. `packages: 'external'` keeps node_modules out of the bundle — firebase-admin's dynamic requires do not survive bundling.
 
 Node 20+ is required (`engines.node >=20.0.0`). There is **no test runner** wired up — no `jest`/`vitest`/`npm test`. Functions ending in `_reset…` / exports under `_internals` exist for future tests but no harness runs them yet. `npm run lint` is not usable either — it prompts for interactive ESLint setup that this repo has never done. **`npm run typecheck` is the real check**; run it before you commit.
 
@@ -48,7 +54,7 @@ Telegram (webhook)        ──► /api/v1/telegram/webhook/:secret ──► f
 
 Every `/api/v1/*` handler is wrapped in `withRoute` (`lib/route-handler.ts`), which assigns a `requestId`, emits one structured access log per request, turns thrown `ApiError`s into the canonical JSON envelope `{ error: { code, message, requestId } }`, and echoes the request ID in `x-request-id`. Non-`ApiError` throws are flattened to `INTERNAL` and real details go to logs only. Route handlers should **throw `ApiError`** rather than returning error responses.
 
-Use `export const runtime = 'nodejs'` and `export const dynamic = 'force-dynamic'` on route files that need server-only APIs (Postgres, crypto). Import path alias is `@/*` → repo root.
+Handlers are Web-standard: they take a `Request` and return a `Response` (Node 20 ships both). There is no framework and no per-file config — a route exists because it is in the table in `server/registry.ts`, which maps `:param` paths to the exported `GET`/`POST`/… of a module under `server/routes/`. Static segments outrank dynamic ones at equal depth, which is what keeps `/api/v1/orders/preview` from being swallowed by `/api/v1/orders/:id`. Import path alias is `@/*` → repo root.
 
 ### Storage (`lib/db.ts`, `lib/store.ts`)
 
@@ -90,7 +96,7 @@ One `BTTradeClient` per `(uid, mode)` kept in a process-local `Map` on the alway
 4. `onSessionChange` hook persists every token rotation back to `bt_sessions`.
 5. `onExpired` hook audits `signin.failure`, sends Telegram alert, evicts from pool.
 
-**Telegram notification policy**: sign-in success/failure and refresh failure alert. Routine `refresh.success` does NOT Telegram (user rule: "don't message me every 45 minutes") — only the audit feed records it. The 45-min platform cron hits `/api/internal/cron/refresh`, walks `listActiveTenantUids()` × `['demo','live']`, runs `refreshTenantMode` which uses a throwaway client and `client.auth.refresh()` — it never prompts for OTP. On refresh failure the snapshot is deleted and the pool entry evicted so the next user-initiated call triggers a fresh login.
+**Telegram notification policy**: sign-in success/failure and refresh failure alert. Routine `refresh.success` does NOT Telegram (user rule: "don't message me every 45 minutes") — only the audit feed records it. The 30-min platform cron hits `/api/internal/cron/refresh`, walks `listActiveTenantUids()` × `['demo','live']`, runs `refreshTenantMode` which uses a throwaway client and `client.auth.refresh()` — it never prompts for OTP. On refresh failure the snapshot is deleted and the pool entry evicted so the next user-initiated call triggers a fresh login.
 
 The cron route accepts its shared secret **either** as `Authorization: Bearer <INTERNAL_CRON_SECRET>` **or** as `{"secret": "..."}` in the JSON body. The platform scheduler sends a method, a path and a body but cannot attach a header, hence the second path. The body is deliberately preferred over a `?secret=` query parameter, which would land in the edge proxy's access log.
 
@@ -133,7 +139,8 @@ The three record streams sort on a value extracted from the JSON payload into a 
 - **Keep demo/live fully separated**. When you add anything tenant-scoped, it must also be mode-scoped; never write a helper that forgets the `mode` parameter.
 - **All SQL lives in `lib/store.ts`.** Routes call typed accessors. If you need a new query, add a named helper next to its siblings.
 - **`/api/health` must not depend on the database.** It is the container healthcheck and the deploy's readiness gate; making it touch Postgres turns a transient database blip into a rolled-back deploy.
-- The root layout (`app/layout.tsx`) is `export const dynamic = 'force-dynamic'` on purpose — it inlines Firebase Web config from the app env into the HTML. Don't make it static.
+- **The SPA must not claim `/api/*`.** The static host serves any path in the bundle and forwards the rest to the container, so a bundled `/api` path would shadow the API. `web/src/App.tsx` routes only UI paths; its catch-all redirects home rather than rendering a 404, because genuinely unknown paths never reach the SPA.
+- **Firebase web config is build-time** (`web/.env.production`, `VITE_FIREBASE_*`). It is public by design — `apiKey` is a quota identifier, not a credential — which is why it can be committed. This is what removed the need for a server-rendered config `<script>`, and with it the last reason the UI needed a server.
 - **Dockerfile invariants** (documented at the top of that file, all four load-bearing): port 80, dual-stack `HOSTNAME="::"`, no `USER` line, and a `HEALTHCHECK` on `/api/health` with curl installed. Breaking any of them fails the deploy in a way that looks unrelated to the change.
 
 ## Useful env vars
@@ -144,7 +151,7 @@ The three record streams sort on a value extracted from the JSON payload into a 
 | `MASTER_KEY` | 32 bytes base64 — envelope-encryption key for creds and bot tokens |
 | `MASTER_KEY_PREVIOUS` | optional, comma-separated, decrypt-only (rotation) |
 | `FIREBASE_PROJECT_ID` | Firebase project (`auto-trader-493814`) |
-| `FIREBASE_WEB_API_KEY`, `FIREBASE_WEB_AUTH_DOMAIN` | Web SDK config, inlined at render time |
+| `BT_GATEWAY_COMMIT` | git SHA, passed as a build arg by CI; surfaced by `/api/health` |
 | `BT_CLIENT_DEBUG=1` | verbose bt-trade logs to stdout |
 | `INTERNAL_CRON_SECRET` | required for `/api/internal/cron/refresh` |
 | `BT_GATEWAY_PUBLIC_URL` | canonical public origin; used for OAuth metadata + the Telegram webhook URL. Set it in prod rather than trusting proxy headers |
@@ -152,8 +159,9 @@ The three record streams sort on a value extracted from the JSON payload into a 
 
 ## Where to look first
 
-- New API endpoint → copy the shape of `app/api/v1/orders/route.ts`.
-- New UI-backed endpoint → copy `app/api/ui/keys/route.ts` (auth via `requireFirebaseUser`).
+- New API endpoint → copy `server/routes/api.v1.orders.ts`, then add the path to `server/registry.ts` by hand (that table is no longer generated).
+- New UI-backed endpoint → copy `server/routes/api.ui.keys.ts` (auth via `requireFirebaseUser`).
+- New UI page → add a route in `web/src/App.tsx`; components live in `web/src/components/`.
 - New persisted data type → add the `Doc` interface + typed accessors in `lib/store.ts`, and the table in the `SCHEMA` constant in `lib/db.ts`; never access tables ad-hoc.
 - Cron job expansion → extend `lib/bt/refresh.ts` and the single cron route in `app/api/internal/cron/refresh/route.ts`.
 - Reading production logs → `/check-logs`.
