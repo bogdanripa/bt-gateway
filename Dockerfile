@@ -86,6 +86,7 @@ ENV HOST="::"
 EXPOSE 80
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=15s \
+  --start-interval=250ms \
   CMD curl -fsS http://localhost:80/api/health || exit 1
 
 # No USER line, on purpose — requirement 2 at the top of this file.
