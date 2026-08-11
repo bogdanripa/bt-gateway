@@ -1388,7 +1388,30 @@ async function notifyTenant(tenant, text) {
 }
 
 // lib/bt/client-pool.ts
-var loginInProgress = /* @__PURE__ */ new Set();
+var loginLock = /* @__PURE__ */ new Map();
+var LOGIN_WAIT_MAX_MS = 2 * 60 * 1e3;
+async function acquireLoginSlot(t, mode) {
+  const deadline = Date.now() + LOGIN_WAIT_MAX_MS;
+  while (loginLock.has(t.uid)) {
+    if (Date.now() >= deadline) throw sessionExpiredError(t, mode, "login-in-progress");
+    const holder = loginLock.get(t.uid);
+    if (!holder) break;
+    await Promise.race([
+      holder.catch(() => {
+      }),
+      new Promise((r) => setTimeout(r, Math.max(0, deadline - Date.now())).unref?.())
+    ]);
+  }
+  let release;
+  const held = new Promise((resolve) => {
+    release = () => {
+      loginLock.delete(t.uid);
+      resolve();
+    };
+  });
+  loginLock.set(t.uid, held);
+  return release;
+}
 var LOGIN_FAILURE_THRESHOLD = 3;
 var LOGIN_COOLDOWN_MS = 5 * 60 * 1e3;
 var loginBreaker = /* @__PURE__ */ new Map();
@@ -1562,14 +1585,12 @@ async function buildClient(t, mode, interactive) {
   if (!interactive) {
     throw sessionExpiredError(t, mode, "login-required");
   }
-  if (loginInProgress.has(t.uid)) {
-    throw sessionExpiredError(t, mode, "login-in-progress");
-  }
-  assertLoginAllowed(t, mode);
-  loginInProgress.add(t.uid);
+  const releaseLogin = await acquireLoginSlot(t, mode);
   try {
+    assertLoginAllowed(t, mode);
     await client.login({ username, password });
   } catch (e) {
+    if (e instanceof ApiError) throw e;
     const msg = summarizeLoginError(e);
     recordLoginFailure(t, mode, msg);
     await audit({
@@ -1588,7 +1609,7 @@ async function buildClient(t, mode, interactive) {
       context: { uid: t.uid, mode, stage: "login" }
     });
   } finally {
-    loginInProgress.delete(t.uid);
+    releaseLogin();
   }
   recordLoginSuccess(t, mode);
   await audit({
@@ -1629,7 +1650,7 @@ async function runWithSession(tenant, mode, op, opts = {}) {
   } catch (e) {
     if (!isSessionExpired(e)) throw e;
     evictBtClient(tenant, mode);
-    await deleteBtSession(tenant, mode);
+    if (interactive) await deleteBtSession(tenant, mode);
     try {
       const fresh = await getBtClient(tenant, mode, { interactive });
       return await op(fresh);

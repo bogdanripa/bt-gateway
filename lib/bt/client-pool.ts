@@ -50,16 +50,63 @@ import {
 } from '../store';
 
 /**
- * Tenants with a `login()` currently in flight. Guarantees at most ONE BT
- * sign-in at a time per tenant, so demo + live (and any concurrent request)
- * can't each fire their own 2FA — which BT emails to the same person, and
- * whose codes then collide / invalidate each other. A process-local Set is
- * sufficient because the platform runs exactly one container for this app —
- * it scales to zero when idle, but never to two. There is deliberately no
- * cross-instance coordination, so horizontal scaling would break this and
- * would need the guard moved into Postgres.
+ * Per-TENANT sign-in mutex (keyed by uid, not uid:mode).
+ *
+ * At most one BT `login()` may be in flight per person, because BT sends the
+ * 2FA code by SMS to one phone: two concurrent logins produce two codes that
+ * invalidate each other, so both fail. The key is the uid so demo and live
+ * serialise against each other too.
+ *
+ * A second caller WAITS for the in-flight login and then proceeds, rather
+ * than being turned away with "retry shortly". Failing fast made the caller's
+ * own retry the thing that re-entered this path, which is how one expired
+ * token turned into a burst of authentication attempts.
+ *
+ * The map holds a promise that resolves when the current holder releases.
+ * Race-free on a single-threaded runtime: the `while` re-check and the
+ * `set` that follows it run in one synchronous stretch with no `await`
+ * between them, so exactly one waiter can claim the slot per turn.
+ *
+ * Process-local because the platform runs exactly one container — it scales
+ * to zero when idle, but never to two. Horizontal scaling would need this
+ * moved into Postgres.
  */
-const loginInProgress = new Set<string>();
+const loginLock = new Map<string, Promise<void>>();
+
+/**
+ * How long a queued caller will wait for someone else's login before giving
+ * up. `login()` itself blocks up to 5 minutes waiting for an OTP; the normal
+ * case observed in production is a few seconds, because the phone shortcut
+ * forwards the SMS automatically. This bound exists so a login nobody ever
+ * completes cannot pin every subsequent request behind it.
+ */
+const LOGIN_WAIT_MAX_MS = 2 * 60 * 1000;
+
+async function acquireLoginSlot(t: TenantRef, mode: BtMode): Promise<() => void> {
+  const deadline = Date.now() + LOGIN_WAIT_MAX_MS;
+  while (loginLock.has(t.uid)) {
+    if (Date.now() >= deadline) throw sessionExpiredError(t, mode, 'login-in-progress');
+    const holder = loginLock.get(t.uid);
+    if (!holder) break;
+    // The holder's failure is not ours to rethrow — we only care that its
+    // turn is over. A rejected lock promise still means the slot is free.
+    await Promise.race([
+      holder.catch(() => { /* holder failed; slot is free either way */ }),
+      new Promise<void>((r) => setTimeout(r, Math.max(0, deadline - Date.now())).unref?.()),
+    ]);
+  }
+  // No await between the check above and the claim below — see the note on
+  // loginLock about why that is what makes this race-free.
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = () => {
+      loginLock.delete(t.uid);
+      resolve();
+    };
+  });
+  loginLock.set(t.uid, held);
+  return release;
+}
 
 /**
  * Consecutive-failure circuit breaker for full sign-in, keyed by
@@ -241,6 +288,7 @@ export function _resetLoginBreaker(): void {
 // buildClient's login path. Mirrors the `_internals` convention in
 // lib/auth/api-key.ts.
 export const _internals = {
+  acquireLoginSlot,
   assertLoginAllowed,
   recordLoginFailure,
   recordLoginSuccess,
@@ -377,21 +425,20 @@ async function buildClient(
   // login would email the user another OTP, and the two codes collide /
   // invalidate each other. The caller retries and rides the established
   // session once this login completes.
-  if (loginInProgress.has(t.uid)) {
-    throw sessionExpiredError(t, mode, 'login-in-progress');
-  }
-
-  // Consecutive-failure breaker. Checked HERE, after the snapshot-restore and
-  // concurrency paths, so it only ever suppresses a fresh credential attempt —
-  // a healthy restore is never blocked by it.
-  assertLoginAllowed(t, mode);
-
-  loginInProgress.add(t.uid);
+  // Wait for any sign-in already running for this tenant, then take the slot.
+  const releaseLogin = await acquireLoginSlot(t, mode);
 
   // Full login — blocks until the phone posts an OTP to ntfy (up to 5 min).
   try {
+    // Breaker checked AFTER acquiring the slot, so a caller that queued behind
+    // someone else's login re-evaluates it against that login's outcome
+    // instead of a stale reading taken before the wait.
+    assertLoginAllowed(t, mode);
     await client.login({ username, password });
   } catch (e) {
+    // The breaker's own refusal is already a classified ApiError — it is not
+    // a login attempt, so it must not be audited or counted as one.
+    if (e instanceof ApiError) throw e;
     // Audit + Telegram. sign-in errors are the one case we always alert on.
     // Summarized, not raw: an edge deny page is kilobytes of HTML.
     const msg = summarizeLoginError(e);
@@ -412,7 +459,7 @@ async function buildClient(
       context: { uid: t.uid, mode, stage: 'login' },
     });
   } finally {
-    loginInProgress.delete(t.uid);
+    releaseLogin();
   }
 
   recordLoginSuccess(t, mode);
@@ -518,12 +565,23 @@ export async function runWithSession<T>(
   } catch (e) {
     if (!isSessionExpired(e)) throw e;
     // The op failed because the transport's refresh-after-401 gave up — the
-    // persisted snapshot's refresh token is dead. Drop it so the rebuild does
-    // a fresh (lock-guarded) login instead of restoring the same dead session
-    // and 401-looping. onExpired may already have evicted the pool entry; call
-    // again to be sure.
+    // persisted snapshot's refresh token is dead. onExpired may already have
+    // evicted the pool entry; call again to be sure.
     evictBtClient(tenant, mode);
-    await deleteBtSession(tenant, mode);
+
+    // Only destroy the persisted snapshot when this caller can actually
+    // replace it. An interactive caller can log in, so dropping the snapshot
+    // is what makes the rebuild do a fresh lock-guarded login instead of
+    // restoring the same dead session and 401-looping.
+    //
+    // A NON-interactive caller cannot log in — it fails fast by design. If it
+    // deleted the snapshot anyway it would resolve nothing for itself and
+    // guarantee that the next interactive caller pays a full OTP login: an
+    // SMS plus two password-bearing POSTs to BT's most protected endpoint,
+    // since bt-trade's 2-step flow re-sends the password with the OTP. That
+    // is the traffic worth being frugal with. Evicting the pool entry is
+    // enough to force a fresh restore on the retry below.
+    if (interactive) await deleteBtSession(tenant, mode);
     try {
       const fresh = await getBtClient(tenant, mode, { interactive });
       return await op(fresh);
