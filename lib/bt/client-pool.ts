@@ -71,6 +71,23 @@ import {
  * to zero when idle, but never to two. Horizontal scaling would need this
  * moved into Postgres.
  */
+/**
+ * How this service identifies itself to BT.
+ *
+ * bt-trade defaults to `bt-trade/<version>`; we override so the traffic is
+ * attributable to THIS deployment, commit included. Node's own default is
+ * `user-agent: node`, which on a bank's auth endpoint reads as an
+ * unidentified bot — precisely the wrong signal for someone automating their
+ * own account. Requires @bogdanripa/bt-trade >= 0.3.2; older versions ignore
+ * the option, so shipping this ahead of the dependency bump is a no-op
+ * rather than a break.
+ *
+ * Deliberately NOT a browser User-Agent. See the note in bt-trade's
+ * transport.js: claiming to be Chrome from a Node client is both dishonest
+ * and counterproductive.
+ */
+const USER_AGENT = `bt-gateway/${(process.env.BT_GATEWAY_COMMIT ?? 'dev').slice(0, 7)} (+https://bt-gateway-coolify.bogdanripa.com)`;
+
 const loginLock = new Map<string, Promise<void>>();
 
 /**
@@ -330,6 +347,13 @@ async function buildClient(
     otpProvider,
     log: btLog(t.uid, mode),
     timeoutMs: 30_000,
+    // Spread rather than a plain property: `userAgent` arrives in
+    // @bogdanripa/bt-trade 0.3.2 and 0.3.1's typings do not declare it, so a
+    // literal property would fail typecheck against the installed version.
+    // Excess-property checking does not apply to spreads, and 0.3.1's runtime
+    // ignores unknown options — so this is inert until the dependency is
+    // bumped, and takes effect the moment it is. Drop the spread then.
+    ...({ userAgent: USER_AGENT } as { userAgent?: string }),
     onSessionChange: async (snap) => {
       if (!snap) {
         await deleteBtSession(t, mode).catch(() => { /* best-effort */ });

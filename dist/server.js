@@ -1388,6 +1388,7 @@ async function notifyTenant(tenant, text) {
 }
 
 // lib/bt/client-pool.ts
+var USER_AGENT = `bt-gateway/${(process.env.BT_GATEWAY_COMMIT ?? "dev").slice(0, 7)} (+https://bt-gateway-coolify.bogdanripa.com)`;
 var loginLock = /* @__PURE__ */ new Map();
 var LOGIN_WAIT_MAX_MS = 2 * 60 * 1e3;
 async function acquireLoginSlot(t, mode) {
@@ -1520,6 +1521,13 @@ async function buildClient(t, mode, interactive) {
     otpProvider,
     log: btLog(t.uid, mode),
     timeoutMs: 3e4,
+    // Spread rather than a plain property: `userAgent` arrives in
+    // @bogdanripa/bt-trade 0.3.2 and 0.3.1's typings do not declare it, so a
+    // literal property would fail typecheck against the installed version.
+    // Excess-property checking does not apply to spreads, and 0.3.1's runtime
+    // ignores unknown options — so this is inert until the dependency is
+    // bumped, and takes effect the moment it is. Drop the spread then.
+    ...{ userAgent: USER_AGENT },
     onSessionChange: async (snap) => {
       if (!snap) {
         await deleteBtSession(t, mode).catch(() => {
