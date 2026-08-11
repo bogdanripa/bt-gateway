@@ -1023,8 +1023,15 @@ import {
 
 // lib/bt/session-internals.ts
 import { AuthError } from "@bogdanripa/bt-trade";
+function isUpstreamBlocked(e) {
+  if (!e) return false;
+  const msg = e.message ?? "";
+  if (!msg) return false;
+  return /<!DOCTYPE html|<html|Acces blocat|Access denied|Reference ID:|Forbidden|<title>/i.test(msg);
+}
 function isSessionExpired(e) {
   if (!e) return false;
+  if (isUpstreamBlocked(e)) return false;
   if (e instanceof AuthError) return true;
   const msg = e.message ?? "";
   if (!msg) return false;
@@ -1382,6 +1389,9 @@ async function notifyTenant(tenant, text) {
 
 // lib/bt/client-pool.ts
 var loginInProgress = /* @__PURE__ */ new Set();
+var LOGIN_FAILURE_THRESHOLD = 3;
+var LOGIN_COOLDOWN_MS = 5 * 60 * 1e3;
+var loginBreaker = /* @__PURE__ */ new Map();
 var pool2 = /* @__PURE__ */ new Map();
 var inflight = /* @__PURE__ */ new Map();
 function key(t, mode) {
@@ -1406,6 +1416,63 @@ function toBtApiError(e, label, t, mode) {
   return new ApiError("UPSTREAM_UNAVAILABLE", `${label} failed: ${e.message}`, {
     context: { uid: t.uid, mode, label }
   });
+}
+function summarizeLoginError(e) {
+  const raw = e?.message || "login failed";
+  if (!isUpstreamBlocked(e)) return raw.length > 300 ? `${raw.slice(0, 300)}\u2026` : raw;
+  const ref = /Reference ID:\s*([^\s<]+)/i.exec(raw)?.[1];
+  const ip = /Client IP:\s*([0-9a-fA-F.:]+)/i.exec(raw)?.[1];
+  const bits = ["BT edge refused this IP (Access denied / Acces blocat)"];
+  if (ip) bits.push(`clientIp=${ip}`);
+  if (ref) bits.push(`ref=${ref}`);
+  return bits.join(" ");
+}
+function assertLoginAllowed(t, mode) {
+  const b = loginBreaker.get(key(t, mode));
+  if (!b || b.count < LOGIN_FAILURE_THRESHOLD) return;
+  const remainingMs = b.until - Date.now();
+  if (remainingMs <= 0) return;
+  const remainingSec = Math.ceil(remainingMs / 1e3);
+  throw new ApiError(
+    "UPSTREAM_UNAVAILABLE",
+    `BT ${mode} sign-in suspended after ${b.count} consecutive failures \u2014 retry in ${remainingSec}s`,
+    {
+      context: {
+        uid: t.uid,
+        mode,
+        stage: "login-circuit-open",
+        failures: b.count,
+        retryAfterSec: remainingSec,
+        lastError: b.lastError
+      }
+    }
+  );
+}
+function recordLoginFailure(t, mode, message) {
+  const k = key(t, mode);
+  const prev = loginBreaker.get(k);
+  const count = (prev?.count ?? 0) + 1;
+  loginBreaker.set(k, {
+    count,
+    until: Date.now() + LOGIN_COOLDOWN_MS,
+    lastError: message
+  });
+  if (count === LOGIN_FAILURE_THRESHOLD) {
+    console.error(
+      JSON.stringify({
+        severity: "ERROR",
+        msg: "bt.login.circuit_open",
+        uid: t.uid,
+        mode,
+        failures: count,
+        cooldownSec: LOGIN_COOLDOWN_MS / 1e3,
+        lastError: message
+      })
+    );
+  }
+}
+function recordLoginSuccess(t, mode) {
+  loginBreaker.delete(key(t, mode));
 }
 async function buildClient(t, mode, interactive) {
   const creds = await getBtCreds(t, mode);
@@ -1498,11 +1565,13 @@ async function buildClient(t, mode, interactive) {
   if (loginInProgress.has(t.uid)) {
     throw sessionExpiredError(t, mode, "login-in-progress");
   }
+  assertLoginAllowed(t, mode);
   loginInProgress.add(t.uid);
   try {
     await client.login({ username, password });
   } catch (e) {
-    const msg = e.message || "login failed";
+    const msg = summarizeLoginError(e);
+    recordLoginFailure(t, mode, msg);
     await audit({
       tenant: t,
       type: "signin.failure",
@@ -1521,6 +1590,7 @@ async function buildClient(t, mode, interactive) {
   } finally {
     loginInProgress.delete(t.uid);
   }
+  recordLoginSuccess(t, mode);
   await audit({
     tenant: t,
     type: "signin.success",

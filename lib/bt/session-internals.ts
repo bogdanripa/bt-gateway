@@ -11,12 +11,45 @@ import { AuthError, type BTTradeClient } from '@bogdanripa/bt-trade';
 import type { BtMode } from '../store';
 
 /**
+ * Detect an upstream BLOCK rather than an auth outcome: BT's edge (WAF)
+ * answering with an HTML deny page instead of the JSON the API contract
+ * promises.
+ *
+ * This matters because bt-trade cannot tell the two apart. It POSTs to
+ * /api/RefreshToken, gets `<!DOCTYPE html>… Acces blocat / Access denied …`
+ * back, fails to parse it, and raises `AuthError` — the exact same type it
+ * raises for a genuinely dead session. Treating that as expiry is what
+ * turned a transient IP block into 35 full logins in 25 seconds against a
+ * bank's auth endpoint: every request deleted the (still perfectly valid)
+ * session snapshot and re-authenticated, which is the behaviour most likely
+ * to extend the block and flag the account.
+ *
+ * Matched on the response body because that is all we get — the HTML never
+ * carries a machine-readable code, and bt-trade does not surface the HTTP
+ * status. Any HTML body from a JSON endpoint is by definition not a valid
+ * auth answer, so the doctype/tag check is the load-bearing one; the phrase
+ * list only sharpens the log message.
+ */
+export function isUpstreamBlocked(e: unknown): boolean {
+  if (!e) return false;
+  const msg = (e as Error).message ?? '';
+  if (!msg) return false;
+  return /<!DOCTYPE html|<html|Acces blocat|Access denied|Reference ID:|Forbidden|<title>/i.test(msg);
+}
+
+/**
  * Detect the "session is toast" family of errors bt-trade raises when it
  * can't auto-refresh past a 401: AuthError thrown from the transport's
  * refresh-and-retry path, or specific message substrings from auth.js.
+ *
+ * An upstream block is explicitly NOT session expiry, even though it also
+ * arrives as an AuthError. Callers use this to decide whether to destroy
+ * the persisted snapshot and re-login; doing that because a firewall said
+ * no loses a working session and amplifies the outage.
  */
 export function isSessionExpired(e: unknown): boolean {
   if (!e) return false;
+  if (isUpstreamBlocked(e)) return false;
   if (e instanceof AuthError) return true;
   const msg = (e as Error).message ?? '';
   if (!msg) return false;

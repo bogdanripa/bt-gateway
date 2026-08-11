@@ -35,7 +35,7 @@ import {
   defaultNtfyTopic,
   type SessionSnapshot,
 } from '@bogdanripa/bt-trade';
-import { instrumentRefresh, isSessionExpired } from './session-internals';
+import { instrumentRefresh, isSessionExpired, isUpstreamBlocked } from './session-internals';
 import { ApiError } from '../errors';
 import { decrypt } from '../secret-box';
 import { audit } from '../events';
@@ -60,6 +60,34 @@ import {
  * would need the guard moved into Postgres.
  */
 const loginInProgress = new Set<string>();
+
+/**
+ * Consecutive-failure circuit breaker for full sign-in, keyed by
+ * `uid:mode`.
+ *
+ * `loginInProgress` only ever guarded CONCURRENT logins — it is released in
+ * a `finally` the moment login throws, so sequential retries walked straight
+ * past it. With a route retrying per request, an upstream outage became one
+ * fresh `login()` per inbound call: 35 authentication attempts in 25 seconds
+ * against BT's auth endpoint, from a residential IP. The per-key 60 req/min
+ * rate limit never fired because the request rate was never the problem.
+ *
+ * After THRESHOLD consecutive failures, sign-in is refused outright for
+ * COOLDOWN_MS. That is deliberately a hard stop and not a backoff: when the
+ * far side is refusing us, the correct number of additional credential
+ * attempts is zero. One success resets it.
+ */
+const LOGIN_FAILURE_THRESHOLD = 3;
+const LOGIN_COOLDOWN_MS = 5 * 60 * 1000;
+
+interface LoginBreaker {
+  count: number;
+  /** Epoch ms before which no further login may be attempted. */
+  until: number;
+  lastError: string;
+}
+
+const loginBreaker = new Map<string, LoginBreaker>();
 
 interface PoolEntry {
   client: BTTradeClient;
@@ -125,6 +153,101 @@ export function toBtApiError(
     context: { uid: t.uid, mode, label },
   });
 }
+
+/**
+ * Collapse a sign-in error into one readable line.
+ *
+ * BT's edge deny page is ~9 kB of HTML with an inline base64 logo. Logging it
+ * raw put 35 copies into the container log (300 kB+ for a two-minute window)
+ * and would have pushed the same wall of markup into a Telegram alert. The
+ * only parts that matter operationally are that it IS a block, and the
+ * Reference ID + Client IP that BT asks you to quote when reporting it.
+ */
+function summarizeLoginError(e: unknown): string {
+  const raw = (e as Error)?.message || 'login failed';
+  if (!isUpstreamBlocked(e)) return raw.length > 300 ? `${raw.slice(0, 300)}…` : raw;
+  const ref = /Reference ID:\s*([^\s<]+)/i.exec(raw)?.[1];
+  const ip = /Client IP:\s*([0-9a-fA-F.:]+)/i.exec(raw)?.[1];
+  const bits = ['BT edge refused this IP (Access denied / Acces blocat)'];
+  if (ip) bits.push(`clientIp=${ip}`);
+  if (ref) bits.push(`ref=${ref}`);
+  return bits.join(' ');
+}
+
+/**
+ * Throw if sign-in is currently circuit-broken for this tenant+mode.
+ *
+ * Reported as UPSTREAM_UNAVAILABLE, not SESSION_EXPIRED: the session is not
+ * the problem and a human re-authenticating would not help — the far side is
+ * refusing us. A 502 tells the caller to back off; a 503 SESSION_EXPIRED
+ * would invite exactly the re-auth attempt we are trying to prevent.
+ */
+function assertLoginAllowed(t: TenantRef, mode: BtMode): void {
+  const b = loginBreaker.get(key(t, mode));
+  if (!b || b.count < LOGIN_FAILURE_THRESHOLD) return;
+  const remainingMs = b.until - Date.now();
+  if (remainingMs <= 0) return;
+  const remainingSec = Math.ceil(remainingMs / 1000);
+  throw new ApiError(
+    'UPSTREAM_UNAVAILABLE',
+    `BT ${mode} sign-in suspended after ${b.count} consecutive failures — retry in ${remainingSec}s`,
+    {
+      context: {
+        uid: t.uid,
+        mode,
+        stage: 'login-circuit-open',
+        failures: b.count,
+        retryAfterSec: remainingSec,
+        lastError: b.lastError,
+      },
+    },
+  );
+}
+
+function recordLoginFailure(t: TenantRef, mode: BtMode, message: string): void {
+  const k = key(t, mode);
+  const prev = loginBreaker.get(k);
+  const count = (prev?.count ?? 0) + 1;
+  loginBreaker.set(k, {
+    count,
+    until: Date.now() + LOGIN_COOLDOWN_MS,
+    lastError: message,
+  });
+  if (count === LOGIN_FAILURE_THRESHOLD) {
+    console.error(
+      JSON.stringify({
+        severity: 'ERROR',
+        msg: 'bt.login.circuit_open',
+        uid: t.uid,
+        mode,
+        failures: count,
+        cooldownSec: LOGIN_COOLDOWN_MS / 1000,
+        lastError: message,
+      }),
+    );
+  }
+}
+
+function recordLoginSuccess(t: TenantRef, mode: BtMode): void {
+  loginBreaker.delete(key(t, mode));
+}
+
+/** Test seam — the breaker is process-local and survives across tests. */
+export function _resetLoginBreaker(): void {
+  loginBreaker.clear();
+}
+
+// Exposed for tests only; the breaker is otherwise driven entirely from
+// buildClient's login path. Mirrors the `_internals` convention in
+// lib/auth/api-key.ts.
+export const _internals = {
+  assertLoginAllowed,
+  recordLoginFailure,
+  recordLoginSuccess,
+  summarizeLoginError,
+  LOGIN_FAILURE_THRESHOLD,
+  LOGIN_COOLDOWN_MS,
+};
 
 async function buildClient(
   t: TenantRef,
@@ -257,6 +380,12 @@ async function buildClient(
   if (loginInProgress.has(t.uid)) {
     throw sessionExpiredError(t, mode, 'login-in-progress');
   }
+
+  // Consecutive-failure breaker. Checked HERE, after the snapshot-restore and
+  // concurrency paths, so it only ever suppresses a fresh credential attempt —
+  // a healthy restore is never blocked by it.
+  assertLoginAllowed(t, mode);
+
   loginInProgress.add(t.uid);
 
   // Full login — blocks until the phone posts an OTP to ntfy (up to 5 min).
@@ -264,7 +393,9 @@ async function buildClient(
     await client.login({ username, password });
   } catch (e) {
     // Audit + Telegram. sign-in errors are the one case we always alert on.
-    const msg = (e as Error).message || 'login failed';
+    // Summarized, not raw: an edge deny page is kilobytes of HTML.
+    const msg = summarizeLoginError(e);
+    recordLoginFailure(t, mode, msg);
     await audit({
       tenant: t,
       type: 'signin.failure',
@@ -283,6 +414,8 @@ async function buildClient(
   } finally {
     loginInProgress.delete(t.uid);
   }
+
+  recordLoginSuccess(t, mode);
 
   await audit({
     tenant: t,
