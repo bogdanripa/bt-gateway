@@ -229,8 +229,14 @@ export function toBtApiError(
 function summarizeLoginError(e: unknown): string {
   const raw = (e as Error)?.message || 'login failed';
   if (!isUpstreamBlocked(e)) return raw.length > 300 ? `${raw.slice(0, 300)}…` : raw;
-  const ref = /Reference ID:\s*([^\s<]+)/i.exec(raw)?.[1];
-  const ip = /Client IP:\s*([0-9a-fA-F.:]+)/i.exec(raw)?.[1];
+  // The labels and their values are separated by markup — the page renders
+  // them as `Reference ID:</b> <code>0.a73bd417…</code>` — so skip over any
+  // run of tags and whitespace before the value. Without this the capture
+  // starts at `<` and matches nothing, silently dropping the two identifiers
+  // this function exists to preserve.
+  const skip = String.raw`(?:\s|<[^>]*>)*`;
+  const ref = new RegExp(`Reference ID:${skip}([^\\s<]+)`, 'i').exec(raw)?.[1];
+  const ip = new RegExp(`Client IP:${skip}([0-9a-fA-F.:]+)`, 'i').exec(raw)?.[1];
   const bits = ['BT edge refused this IP (Access denied / Acces blocat)'];
   if (ip) bits.push(`clientIp=${ip}`);
   if (ref) bits.push(`ref=${ref}`);

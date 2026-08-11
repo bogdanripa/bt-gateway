@@ -1444,8 +1444,9 @@ function toBtApiError(e, label, t, mode) {
 function summarizeLoginError(e) {
   const raw = e?.message || "login failed";
   if (!isUpstreamBlocked(e)) return raw.length > 300 ? `${raw.slice(0, 300)}\u2026` : raw;
-  const ref = /Reference ID:\s*([^\s<]+)/i.exec(raw)?.[1];
-  const ip = /Client IP:\s*([0-9a-fA-F.:]+)/i.exec(raw)?.[1];
+  const skip = String.raw`(?:\s|<[^>]*>)*`;
+  const ref = new RegExp(`Reference ID:${skip}([^\\s<]+)`, "i").exec(raw)?.[1];
+  const ip = new RegExp(`Client IP:${skip}([0-9a-fA-F.:]+)`, "i").exec(raw)?.[1];
   const bits = ["BT edge refused this IP (Access denied / Acces blocat)"];
   if (ip) bits.push(`clientIp=${ip}`);
   if (ref) bits.push(`ref=${ref}`);
