@@ -31,6 +31,11 @@ declare module '@bogdanripa/bt-trade' {
     log?: (msg: string, data?: unknown) => void;
     debug?: boolean;
     timeoutMs?: number;
+    /**
+     * User-Agent to send. Defaults to `bt-trade/<version>` in the library.
+     * Requires @bogdanripa/bt-trade >= 0.3.2.
+     */
+    userAgent?: string;
     onSessionChange?: (snap: SessionSnapshot | null) => void | Promise<void>;
     onExpired?: (err: Error) => void;
   }

@@ -78,9 +78,8 @@ import {
  * attributable to THIS deployment, commit included. Node's own default is
  * `user-agent: node`, which on a bank's auth endpoint reads as an
  * unidentified bot — precisely the wrong signal for someone automating their
- * own account. Requires @bogdanripa/bt-trade >= 0.3.2; older versions ignore
- * the option, so shipping this ahead of the dependency bump is a no-op
- * rather than a break.
+ * own account. Requires @bogdanripa/bt-trade >= 0.3.2, which is now the
+ * declared dependency.
  *
  * Deliberately NOT a browser User-Agent. See the note in bt-trade's
  * transport.js: claiming to be Chrome from a Node client is both dishonest
@@ -347,13 +346,7 @@ async function buildClient(
     otpProvider,
     log: btLog(t.uid, mode),
     timeoutMs: 30_000,
-    // Spread rather than a plain property: `userAgent` arrives in
-    // @bogdanripa/bt-trade 0.3.2 and 0.3.1's typings do not declare it, so a
-    // literal property would fail typecheck against the installed version.
-    // Excess-property checking does not apply to spreads, and 0.3.1's runtime
-    // ignores unknown options — so this is inert until the dependency is
-    // bumped, and takes effect the moment it is. Drop the spread then.
-    ...({ userAgent: USER_AGENT } as { userAgent?: string }),
+    userAgent: USER_AGENT,
     onSessionChange: async (snap) => {
       if (!snap) {
         await deleteBtSession(t, mode).catch(() => { /* best-effort */ });

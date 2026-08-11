@@ -13,7 +13,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@bogdanripa/bt-trade": "^0.3.1",
+    "@bogdanripa/bt-trade": "^0.3.2",
     "firebase-admin": "^12.6.0",
     "pg": "^8.22.0",
     "zod": "^3.23.8"
