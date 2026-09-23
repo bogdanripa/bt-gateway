@@ -2175,7 +2175,7 @@ function pickNumber(o, keys2) {
 function readRecordFields(r, opts) {
   if (!r || typeof r !== "object") return {};
   const o = r;
-  const pickStr2 = (obj, keys2) => {
+  const pickStr3 = (obj, keys2) => {
     for (const k of keys2) {
       const v = obj[k];
       if (typeof v === "string" && v.trim()) return v.trim();
@@ -2186,13 +2186,13 @@ function readRecordFields(r, opts) {
     for (const k of NESTED_CURRENCY_CONTAINERS) {
       const parent = o[k];
       if (parent && typeof parent === "object") {
-        const v = pickStr2(parent, CURRENCY_KEYS);
+        const v = pickStr3(parent, CURRENCY_KEYS);
         if (v) return v;
       }
     }
     return void 0;
   };
-  let market = pickStr2(o, MARKET_KEYS);
+  let market = pickStr3(o, MARKET_KEYS);
   if (opts?.marketsCache) {
     const mid = pickNumber(o, MARKET_ID_KEYS);
     if (mid !== void 0) {
@@ -2202,8 +2202,8 @@ function readRecordFields(r, opts) {
   }
   return {
     market,
-    currency: pickStr2(o, CURRENCY_KEYS) ?? nestedCurrency(),
-    symbol: pickStr2(o, SYMBOL_KEYS)
+    currency: pickStr3(o, CURRENCY_KEYS) ?? nestedCurrency(),
+    symbol: pickStr3(o, SYMBOL_KEYS)
   };
 }
 function filterPortfolioSelectResponse(payload, filters, marketsCache) {
@@ -3396,6 +3396,90 @@ var POST8 = withRoute(async (req) => {
 
 // server/routes/api.v1.orders.ts
 import { z as z7 } from "zod";
+
+// lib/bt/order-statuses.ts
+var cache4 = /* @__PURE__ */ new Map();
+function cacheKey3(t, mode) {
+  return `${t.uid}:${mode}`;
+}
+function pickStr2(o, ...keys2) {
+  for (const k of keys2) {
+    const v = o[k];
+    if (typeof v === "string" && v.trim()) return v.trim();
+  }
+  return void 0;
+}
+function pickNum(o, ...keys2) {
+  for (const k of keys2) {
+    const v = o[k];
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string" && v.trim()) {
+      const n = Number(v);
+      if (Number.isFinite(n)) return n;
+    }
+  }
+  return void 0;
+}
+async function loadOrderStatuses(client) {
+  const raw = await client.reference.listOrderStatuses();
+  const options = [];
+  const byName = /* @__PURE__ */ new Map();
+  const ids = /* @__PURE__ */ new Set();
+  if (Array.isArray(raw)) {
+    for (const s of raw) {
+      if (!s || typeof s !== "object") continue;
+      const o = s;
+      const id = pickNum(o, "id", "Id", "ID", "statusId", "StatusId");
+      const name = pickStr2(o, "name", "Name", "description", "Description", "label", "Label");
+      if (id === void 0 || !name) continue;
+      options.push({ id, name });
+      byName.set(name.toUpperCase(), id);
+      ids.add(id);
+    }
+  }
+  return { options, byName, ids };
+}
+function getOrderStatuses(t, mode, client) {
+  const k = cacheKey3(t, mode);
+  const existing = cache4.get(k);
+  if (existing) return existing;
+  const p = loadOrderStatuses(client).catch((e) => {
+    cache4.delete(k);
+    throw e;
+  });
+  cache4.set(k, p);
+  return p;
+}
+async function resolveOrderStatuses(t, mode, client, tokens) {
+  const bundle = await getOrderStatuses(t, mode, client);
+  if (bundle.options.length === 0) return [...tokens];
+  const resolved = [];
+  const unknown = [];
+  for (const token of tokens) {
+    const asNum = Number(token);
+    if (Number.isFinite(asNum) && bundle.ids.has(asNum)) {
+      resolved.push(asNum);
+      continue;
+    }
+    const byName = bundle.byName.get(token.trim().toUpperCase());
+    if (byName !== void 0) {
+      resolved.push(byName);
+      continue;
+    }
+    unknown.push(token);
+  }
+  if (unknown.length > 0) {
+    const valid = bundle.options.map((o) => `${o.name} (${o.id})`).join(", ");
+    throw new ApiError(
+      "BAD_REQUEST",
+      `Unknown order status${unknown.length > 1 ? "es" : ""}: ${unknown.join(", ")}. BT accepts these: ${valid}. Omit "statuses" to list every order.`,
+      { context: { unknown, valid: bundle.options } }
+    );
+  }
+  return resolved;
+}
+
+// server/routes/api.v1.orders.ts
 var PlaceSchema = z7.object({
   symbol: z7.string().min(1).max(32),
   marketId: z7.union([z7.string(), z7.number()]).optional(),
@@ -3499,10 +3583,11 @@ var GET24 = withRoute(async (req) => {
       caller.mode,
       async (client) => {
         const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
+        const resolvedStatuses = statuses ? await resolveOrderStatuses(caller.tenant, caller.mode, client, statuses) : void 0;
         const [o, mc] = await Promise.all([
           client.orders.search({
             portfolioKey,
-            statuses,
+            statuses: resolvedStatuses,
             side,
             symbol: symbolParam,
             startDate: sp.get("startDate") ?? void 0,
@@ -3518,6 +3603,14 @@ var GET24 = withRoute(async (req) => {
     return ok({ mode: caller.mode, orders });
   } catch (e) {
     if (e instanceof ApiError) throw e;
+    const upstreamStatus = e.status;
+    if (typeof upstreamStatus === "number" && upstreamStatus >= 400 && upstreamStatus < 500) {
+      throw new ApiError(
+        "BAD_REQUEST",
+        `BT rejected the order search (HTTP ${upstreamStatus}). Check the query parameters \u2014 "statuses" must be values from BT's own nomenclature.`,
+        { context: { uid: caller.tenant.uid, mode: caller.mode, upstreamStatus } }
+      );
+    }
     throw new ApiError("UPSTREAM_UNAVAILABLE", `orders.search failed: ${e.message}`);
   }
 });
@@ -3742,14 +3835,14 @@ var MCP_TOOLS = [
   },
   {
     name: "list_orders",
-    description: "List the user's orders, optionally filtered. Statuses are BT's status codes (e.g. OPEN, FILLED, CANCELLED, REJECTED). Dates are YYYY-MM-DD.",
+    description: "List the user's orders, optionally filtered. Omit `statuses` to get every order \u2014 that is the reliable call. `statuses` takes values from BT's own nomenclature (ids, or their exact names), NOT generic words like OPEN or FILLED; anything else is rejected with 400 and the error lists what BT accepts. Dates are YYYY-MM-DD.",
     inputSchema: {
       type: "object",
       properties: {
         statuses: {
           type: "array",
           items: { type: "string" },
-          description: 'Optional status filter, e.g. ["OPEN","FILLED"].'
+          description: "Optional status filter, using BT's nomenclature values (id or exact name). Prefer omitting this: BT rejects unknown values outright rather than ignoring them."
         },
         side: { type: "string", enum: ["buy", "sell"] },
         symbol: { type: "string" },

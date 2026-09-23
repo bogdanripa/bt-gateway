@@ -58,14 +58,16 @@ export const MCP_TOOLS: McpTool[] = [
   {
     name: 'list_orders',
     description:
-      "List the user's orders, optionally filtered. Statuses are BT's status codes (e.g. OPEN, FILLED, CANCELLED, REJECTED). Dates are YYYY-MM-DD.",
+      "List the user's orders, optionally filtered. Omit `statuses` to get every order — that is the reliable call. `statuses` takes values from BT's own nomenclature (ids, or their exact names), NOT generic words like OPEN or FILLED; anything else is rejected with 400 and the error lists what BT accepts. Dates are YYYY-MM-DD.",
     inputSchema: {
       type: 'object',
       properties: {
         statuses: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Optional status filter, e.g. ["OPEN","FILLED"].',
+          description:
+            "Optional status filter, using BT's nomenclature values (id or exact name). " +
+            'Prefer omitting this: BT rejects unknown values outright rather than ignoring them.',
         },
         side: { type: 'string', enum: ['buy', 'sell'] },
         symbol: { type: 'string' },

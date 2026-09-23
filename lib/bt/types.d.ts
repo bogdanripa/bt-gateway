@@ -85,6 +85,10 @@ declare module '@bogdanripa/bt-trade' {
   export interface ReferenceApi {
     listCurrencies(): Promise<unknown>;
     listEvaluationCurrencies(): Promise<unknown>;
+    listAccountTypes(): Promise<unknown>;
+    /** Nomenclatures/GetOrderStatuses — the vocabulary `orders.search` expects. */
+    listOrderStatuses(): Promise<unknown>;
+    listTradeTypes(): Promise<unknown>;
   }
 
   export interface PortfolioApi {
@@ -119,7 +123,7 @@ declare module '@bogdanripa/bt-trade' {
   export interface OrdersApi {
     search(args: {
       portfolioKey: string;
-      statuses?: string[];
+      statuses?: Array<string | number>;
       side?: OrderSide;
       symbol?: string;
       interval?: string;

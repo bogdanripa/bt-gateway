@@ -30,6 +30,7 @@ import { requireApiKey, assertWriteAccess } from '@/lib/auth/api-key';
 import { runWithSession, runWithSessionMutating } from '@/lib/bt/client-pool';
 import { resolveInstrument } from '@/lib/bt/instruments';
 import { getMarketsCache } from '@/lib/bt/markets-cache';
+import { resolveOrderStatuses } from '@/lib/bt/order-statuses';
 import { getPortfolioKey } from '@/lib/bt/portfolio-key';
 import { ok, withRoute } from '@/lib/route-handler';
 import { ApiError, json } from '@/lib/errors';
@@ -164,10 +165,17 @@ export const GET = withRoute(async (req) => {
       caller.mode,
       async (client) => {
         const portfolioKey = await getPortfolioKey(caller.tenant, caller.mode, client);
+        // BT's `criteria.statuses` takes server-known status codes, not free
+        // text, and rejects the WHOLE request with HTTP 400 otherwise. Resolve
+        // names/ids against the nomenclature first — only when the caller
+        // actually filtered, so the common unfiltered listing costs nothing.
+        const resolvedStatuses = statuses
+          ? await resolveOrderStatuses(caller.tenant, caller.mode, client, statuses)
+          : undefined;
         const [o, mc] = await Promise.all([
           client.orders.search({
             portfolioKey,
-            statuses,
+            statuses: resolvedStatuses,
             side,
             symbol: symbolParam,
             startDate: sp.get('startDate') ?? undefined,
@@ -187,6 +195,19 @@ export const GET = withRoute(async (req) => {
     return ok({ mode: caller.mode, orders });
   } catch (e) {
     if (e instanceof ApiError) throw e;
+    // A 4xx from BT means OUR request was malformed — that is the caller's
+    // problem, not an outage. Reporting it as UPSTREAM_UNAVAILABLE (502) is
+    // what made a rejected `statuses` value look like BT being down while
+    // every other route stayed healthy.
+    const upstreamStatus = (e as { status?: number }).status;
+    if (typeof upstreamStatus === 'number' && upstreamStatus >= 400 && upstreamStatus < 500) {
+      throw new ApiError(
+        'BAD_REQUEST',
+        `BT rejected the order search (HTTP ${upstreamStatus}). Check the query parameters — ` +
+          `"statuses" must be values from BT's own nomenclature.`,
+        { context: { uid: caller.tenant.uid, mode: caller.mode, upstreamStatus } },
+      );
+    }
     throw new ApiError('UPSTREAM_UNAVAILABLE', `orders.search failed: ${(e as Error).message}`);
   }
 });
