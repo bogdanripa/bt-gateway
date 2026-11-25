@@ -272,6 +272,13 @@ const CURRENCY_KEYS = ['currency', 'Currency'];
 // MoneyValue with .currency). Keep lowercase+PascalCase to cover both
 // shapes observed.
 const NESTED_CURRENCY_CONTAINERS = ['value', 'Value'];
+// BT nests the identifying pair inside a sub-object on several payloads:
+// an order row carries `Symbol: { Code, MarketId }` and a position carries
+// `Key: { Code, MarketId, Market, ... }`. Orders/Get returns a record whose
+// market lives ONLY there, which is why a single-order lookup reported
+// market=<unknown> and 403'd on a market-restricted key while the listing of
+// the very same order resolved fine from its top-level fields.
+const NESTED_RECORD_CONTAINERS = ['Symbol', 'symbol', 'Key', 'key'];
 
 const MARKET_ID_KEYS = ['MarketId', 'marketId', 'ExchangeId', 'exchangeId'];
 
@@ -319,9 +326,32 @@ export function readRecordFields(
   // segment-level code on `Market` (e.g. "REGS" for the BVB regulated-market
   // segment) while the user-configured filter is the parent exchange code
   // ("BVB"). MarketId is stable across segments.
-  let market = pickStr(o, MARKET_KEYS);
+  // Top level wins; a nested container is only consulted when the field is
+  // absent there, so records that already resolve keep resolving identically.
+  const nested = (keys: string[]): string | undefined => {
+    for (const k of NESTED_RECORD_CONTAINERS) {
+      const parent = o[k];
+      if (parent && typeof parent === 'object') {
+        const v = pickStr(parent as Record<string, unknown>, keys);
+        if (v) return v;
+      }
+    }
+    return undefined;
+  };
+  const nestedNumber = (keys: string[]): number | undefined => {
+    for (const k of NESTED_RECORD_CONTAINERS) {
+      const parent = o[k];
+      if (parent && typeof parent === 'object') {
+        const v = pickNumber(parent as Record<string, unknown>, keys);
+        if (v !== undefined) return v;
+      }
+    }
+    return undefined;
+  };
+
+  let market = pickStr(o, MARKET_KEYS) ?? nested(MARKET_KEYS);
   if (opts?.marketsCache) {
-    const mid = pickNumber(o, MARKET_ID_KEYS);
+    const mid = pickNumber(o, MARKET_ID_KEYS) ?? nestedNumber(MARKET_ID_KEYS);
     if (mid !== undefined) {
       const canonical = opts.marketsCache.get(mid);
       if (canonical) market = canonical;
@@ -331,7 +361,7 @@ export function readRecordFields(
   return {
     market,
     currency: pickStr(o, CURRENCY_KEYS) ?? nestedCurrency(),
-    symbol: pickStr(o, SYMBOL_KEYS),
+    symbol: pickStr(o, SYMBOL_KEYS) ?? nested(SYMBOL_KEYS),
   };
 }
 

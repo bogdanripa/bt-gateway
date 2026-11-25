@@ -2160,6 +2160,7 @@ var SYMBOL_KEYS = ["symbol", "Symbol", "code", "Code", "ticker", "Ticker"];
 var MARKET_KEYS = ["market", "Market"];
 var CURRENCY_KEYS = ["currency", "Currency"];
 var NESTED_CURRENCY_CONTAINERS = ["value", "Value"];
+var NESTED_RECORD_CONTAINERS = ["Symbol", "symbol", "Key", "key"];
 var MARKET_ID_KEYS = ["MarketId", "marketId", "ExchangeId", "exchangeId"];
 function pickNumber(o, keys2) {
   for (const k of keys2) {
@@ -2192,9 +2193,29 @@ function readRecordFields(r, opts) {
     }
     return void 0;
   };
-  let market = pickStr3(o, MARKET_KEYS);
+  const nested = (keys2) => {
+    for (const k of NESTED_RECORD_CONTAINERS) {
+      const parent = o[k];
+      if (parent && typeof parent === "object") {
+        const v = pickStr3(parent, keys2);
+        if (v) return v;
+      }
+    }
+    return void 0;
+  };
+  const nestedNumber = (keys2) => {
+    for (const k of NESTED_RECORD_CONTAINERS) {
+      const parent = o[k];
+      if (parent && typeof parent === "object") {
+        const v = pickNumber(parent, keys2);
+        if (v !== void 0) return v;
+      }
+    }
+    return void 0;
+  };
+  let market = pickStr3(o, MARKET_KEYS) ?? nested(MARKET_KEYS);
   if (opts?.marketsCache) {
-    const mid = pickNumber(o, MARKET_ID_KEYS);
+    const mid = pickNumber(o, MARKET_ID_KEYS) ?? nestedNumber(MARKET_ID_KEYS);
     if (mid !== void 0) {
       const canonical = opts.marketsCache.get(mid);
       if (canonical) market = canonical;
@@ -2203,7 +2224,7 @@ function readRecordFields(r, opts) {
   return {
     market,
     currency: pickStr3(o, CURRENCY_KEYS) ?? nestedCurrency(),
-    symbol: pickStr3(o, SYMBOL_KEYS)
+    symbol: pickStr3(o, SYMBOL_KEYS) ?? nested(SYMBOL_KEYS)
   };
 }
 function filterPortfolioSelectResponse(payload, filters, marketsCache) {
