@@ -46,9 +46,26 @@ export const GET = withRoute(async (req) => {
     ));
   } catch (e) {
     if (e instanceof ApiError) throw e;
-    throw new ApiError('UPSTREAM_UNAVAILABLE', `BT getHoldings failed: ${(e as Error).message}`, {
-      context: { uid: caller.tenant.uid, mode: caller.mode },
-    });
+    // Record the upstream HTTP status. bt-trade puts it on the thrown error,
+    // but this route only ever logged the message — and BT's message for a
+    // portfolio failure is the untranslated "A aparut o eroare.", which says
+    // nothing about whose fault it is. Without the status there is no way to
+    // tell a broken BT (5xx) from a request we malformed (4xx), which is
+    // exactly the question an on-call reader has.
+    const upstreamStatus = (e as { status?: number }).status;
+    const context = { uid: caller.tenant.uid, mode: caller.mode, upstreamStatus };
+    if (typeof upstreamStatus === 'number' && upstreamStatus >= 400 && upstreamStatus < 500) {
+      throw new ApiError(
+        'BAD_REQUEST',
+        `BT rejected the holdings request (HTTP ${upstreamStatus}): ${(e as Error).message}`,
+        { context },
+      );
+    }
+    throw new ApiError(
+      'UPSTREAM_UNAVAILABLE',
+      `BT getHoldings failed${typeof upstreamStatus === 'number' ? ` (HTTP ${upstreamStatus})` : ''}: ${(e as Error).message}`,
+      { context },
+    );
   }
 
   // filterPortfolioSelectResponse handles the real { Total, Positions } shape.

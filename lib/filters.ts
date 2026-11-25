@@ -169,16 +169,28 @@ export function assertAllowed(
  * Filter an array of upstream records. `pick` extracts the value for each
  * axis from a record; return `undefined` when the field isn't present on
  * that record (it will pass through as unconstrained for that axis).
+ *
+ * `axes` narrows which axes this call enforces, for record types that
+ * STRUCTURALLY cannot carry one. bt-trade's `Order` is the case this exists
+ * for: it has `Market` and `ExchangeId` but no currency string at all (only
+ * `MarketCurrencyId`), so `readRecordFields` always reports its currency as
+ * undefined. Against a key with `currencies.include`, `isAllowedOn`'s
+ * fail-closed-on-unknown rule then rejected EVERY order — a listing that
+ * silently returned zero rows while real orders were open, which is a
+ * dangerous answer to give a trading client. Omitting an axis a record type
+ * can never populate is not a loosening: that axis was never deciding
+ * anything, it was only ever rejecting.
  */
 export function filterRecords<T>(
   records: readonly T[],
   filters: ApiKeyFilters | undefined,
   pick: (r: T) => { market?: string | null; currency?: string | null; symbol?: string | null },
+  axes: FilterAxisName[] = ['markets', 'currencies', 'stocks'],
 ): T[] {
   if (!filters) return [...records];
-  const m = axisOf(filters, 'markets');
-  const c = axisOf(filters, 'currencies');
-  const s = axisOf(filters, 'stocks');
+  const m = axes.includes('markets') ? axisOf(filters, 'markets') : EMPTY_AXIS;
+  const c = axes.includes('currencies') ? axisOf(filters, 'currencies') : EMPTY_AXIS;
+  const s = axes.includes('stocks') ? axisOf(filters, 'stocks') : EMPTY_AXIS;
   if (!hasConstraints(m) && !hasConstraints(c) && !hasConstraints(s)) return [...records];
 
   return records.filter((r) => {
@@ -220,9 +232,10 @@ export function filterPaginatedPayload<R extends { market?: string | null; curre
   payload: unknown,
   filters: ApiKeyFilters | undefined,
   pick: (r: unknown) => R,
+  axes: FilterAxisName[] = ['markets', 'currencies', 'stocks'],
 ): unknown {
   if (Array.isArray(payload)) {
-    return filterRecords(payload as unknown[], filters, pick);
+    return filterRecords(payload as unknown[], filters, pick, axes);
   }
   if (payload && typeof payload === 'object') {
     const obj = payload as Record<string, unknown>;
@@ -230,7 +243,7 @@ export function filterPaginatedPayload<R extends { market?: string | null; curre
       : Array.isArray(obj.items) ? 'items'
       : null;
     if (itemsKey) {
-      const filtered = filterRecords(obj[itemsKey] as unknown[], filters, pick);
+      const filtered = filterRecords(obj[itemsKey] as unknown[], filters, pick, axes);
       obj[itemsKey] = filtered;
       if (typeof obj.TotalItemCount === 'number') obj.TotalItemCount = filtered.length;
       else if (typeof obj.totalItemCount === 'number') obj.totalItemCount = filtered.length;

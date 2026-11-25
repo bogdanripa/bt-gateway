@@ -2123,11 +2123,11 @@ function assertAllowed(filters, picks, axes = ["markets", "currencies", "stocks"
     }
   }
 }
-function filterRecords(records, filters, pick) {
+function filterRecords(records, filters, pick, axes = ["markets", "currencies", "stocks"]) {
   if (!filters) return [...records];
-  const m = axisOf(filters, "markets");
-  const c = axisOf(filters, "currencies");
-  const s = axisOf(filters, "stocks");
+  const m = axes.includes("markets") ? axisOf(filters, "markets") : EMPTY_AXIS;
+  const c = axes.includes("currencies") ? axisOf(filters, "currencies") : EMPTY_AXIS;
+  const s = axes.includes("stocks") ? axisOf(filters, "stocks") : EMPTY_AXIS;
   if (!hasConstraints(m) && !hasConstraints(c) && !hasConstraints(s)) return [...records];
   return records.filter((r) => {
     const fields = pick(r);
@@ -2140,15 +2140,15 @@ function filterRecords(records, filters, pick) {
 function filterByCurrencyOnly(records, filters, pickCurrency) {
   return records.filter((r) => isAllowedOn(filters, "currencies", pickCurrency(r)));
 }
-function filterPaginatedPayload(payload, filters, pick) {
+function filterPaginatedPayload(payload, filters, pick, axes = ["markets", "currencies", "stocks"]) {
   if (Array.isArray(payload)) {
-    return filterRecords(payload, filters, pick);
+    return filterRecords(payload, filters, pick, axes);
   }
   if (payload && typeof payload === "object") {
     const obj = payload;
     const itemsKey = Array.isArray(obj.Items) ? "Items" : Array.isArray(obj.items) ? "items" : null;
     if (itemsKey) {
-      const filtered = filterRecords(obj[itemsKey], filters, pick);
+      const filtered = filterRecords(obj[itemsKey], filters, pick, axes);
       obj[itemsKey] = filtered;
       if (typeof obj.TotalItemCount === "number") obj.TotalItemCount = filtered.length;
       else if (typeof obj.totalItemCount === "number") obj.totalItemCount = filtered.length;
@@ -3151,9 +3151,20 @@ var GET19 = withRoute(async (req) => {
     ));
   } catch (e) {
     if (e instanceof ApiError) throw e;
-    throw new ApiError("UPSTREAM_UNAVAILABLE", `BT getHoldings failed: ${e.message}`, {
-      context: { uid: caller.tenant.uid, mode: caller.mode }
-    });
+    const upstreamStatus = e.status;
+    const context = { uid: caller.tenant.uid, mode: caller.mode, upstreamStatus };
+    if (typeof upstreamStatus === "number" && upstreamStatus >= 400 && upstreamStatus < 500) {
+      throw new ApiError(
+        "BAD_REQUEST",
+        `BT rejected the holdings request (HTTP ${upstreamStatus}): ${e.message}`,
+        { context }
+      );
+    }
+    throw new ApiError(
+      "UPSTREAM_UNAVAILABLE",
+      `BT getHoldings failed${typeof upstreamStatus === "number" ? ` (HTTP ${upstreamStatus})` : ""}: ${e.message}`,
+      { context }
+    );
   }
   const read = (r) => readRecordFields(r, { marketsCache });
   holdings = filterPortfolioSelectResponse(holdings, caller.filters, marketsCache);
@@ -3300,7 +3311,16 @@ var GET23 = withRoute(async (req, { params }) => {
         return { order: o, history: h, actions: a, marketsCache: mc };
       }
     );
-    assertAllowed(caller.filters, readRecordFields(order, { marketsCache }));
+    if (!order || typeof order !== "object") {
+      throw new ApiError("NOT_FOUND", `No order found with number ${id}`, {
+        context: { uid: caller.tenant.uid, mode: caller.mode, id }
+      });
+    }
+    assertAllowed(
+      caller.filters,
+      readRecordFields(order, { marketsCache }),
+      ["markets", "stocks"]
+    );
     return ok({ mode: caller.mode, order, history, actions });
   } catch (e) {
     if (e instanceof ApiError) throw e;
@@ -3599,7 +3619,10 @@ var GET24 = withRoute(async (req) => {
       }
     );
     const read = (r) => readRecordFields(r, { marketsCache });
-    const orders = filterPaginatedPayload(rawOrders, caller.filters, read);
+    const orders = filterPaginatedPayload(rawOrders, caller.filters, read, [
+      "markets",
+      "stocks"
+    ]);
     return ok({ mode: caller.mode, orders });
   } catch (e) {
     if (e instanceof ApiError) throw e;

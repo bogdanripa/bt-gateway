@@ -191,7 +191,13 @@ export const GET = withRoute(async (req) => {
     // { Items: Order[], Page, PageSize, TotalItemCount }. filterPaginatedPayload
     // walks the Items array, filters it, and syncs TotalItemCount.
     const read = (r: unknown) => readRecordFields(r, { marketsCache });
-    const orders = filterPaginatedPayload(rawOrders, caller.filters, read);
+    // Markets and symbols only — an Order has no currency string, so including
+    // the currencies axis dropped every row and returned an empty list while
+    // orders were genuinely open. See the note on filterRecords.
+    const orders = filterPaginatedPayload(rawOrders, caller.filters, read, [
+      'markets',
+      'stocks',
+    ]);
     return ok({ mode: caller.mode, orders });
   } catch (e) {
     if (e instanceof ApiError) throw e;

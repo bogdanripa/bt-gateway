@@ -41,10 +41,31 @@ export const GET = withRoute<{ id: string }>(async (req, { params }) => {
         return { order: o, history: h, actions: a, marketsCache: mc };
       },
     );
+    // BT answers an unknown order number with an empty body rather than a
+    // 404. Without this guard that fell through to assertAllowed, which saw
+    // no fields, fail-closed on the first constrained axis, and reported
+    // "not permitted to access market=<unknown>" — telling the caller they
+    // lack permission for an order that simply does not exist.
+    if (!order || typeof order !== 'object') {
+      throw new ApiError('NOT_FOUND', `No order found with number ${id}`, {
+        context: { uid: caller.tenant.uid, mode: caller.mode, id },
+      });
+    }
+
     // Hide orders that belong to an axis the key can't see. The markets cache
     // canonicalizes Order.Market (which may be a segment code like "REGS") to
-    // "BVB" via the record's MarketId before matching.
-    assertAllowed(caller.filters, readRecordFields(order, { marketsCache }));
+    // "BVB" via the record's ExchangeId before matching.
+    //
+    // Currencies are deliberately NOT enforced here: an Order carries no
+    // currency string (only MarketCurrencyId), so the axis could never match
+    // and rejected every order outright on a currency-restricted key. Market
+    // and symbol are still enforced, and an order's currency follows from the
+    // market it traded on, which is checked.
+    assertAllowed(
+      caller.filters,
+      readRecordFields(order, { marketsCache }),
+      ['markets', 'stocks'],
+    );
     return ok({ mode: caller.mode, order, history, actions });
   } catch (e) {
     if (e instanceof ApiError) throw e;
