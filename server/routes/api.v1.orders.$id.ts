@@ -46,9 +46,27 @@ export const GET = withRoute<{ id: string }>(async (req, { params }) => {
     // no fields, fail-closed on the first constrained axis, and reported
     // "not permitted to access market=<unknown>" — telling the caller they
     // lack permission for an order that simply does not exist.
-    if (!order || typeof order !== 'object') {
+    // An empty object counts as "nothing", not just null: BT returns one for
+    // an order number Orders/Get cannot resolve, and the identifying fields
+    // its typedef promises (OrderNumber, Code, Symbol) are simply absent.
+    // Without this the record reached assertAllowed, matched no axis, and was
+    // reported as "not permitted to access market=<unknown>" — a permission
+    // error for an order we never actually retrieved.
+    const orderFields = order && typeof order === 'object' ? (order as Record<string, unknown>) : null;
+    const identifies = (o: Record<string, unknown>) =>
+      ['OrderNumber', 'orderNumber', 'OrderNumberDisplay', 'Code', 'code', 'Symbol', 'symbol']
+        .some((k) => o[k] !== undefined && o[k] !== null && o[k] !== '');
+    if (!orderFields || !identifies(orderFields)) {
       throw new ApiError('NOT_FOUND', `No order found with number ${id}`, {
-        context: { uid: caller.tenant.uid, mode: caller.mode, id },
+        context: {
+          uid: caller.tenant.uid,
+          mode: caller.mode,
+          id,
+          // Field NAMES only, never values: enough to tell an empty body from
+          // a shape we are reading at the wrong level, without logging an
+          // order's contents.
+          upstreamKeys: orderFields ? Object.keys(orderFields).slice(0, 40) : null,
+        },
       });
     }
 

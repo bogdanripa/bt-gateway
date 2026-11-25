@@ -3311,9 +3311,19 @@ var GET23 = withRoute(async (req, { params }) => {
         return { order: o, history: h, actions: a, marketsCache: mc };
       }
     );
-    if (!order || typeof order !== "object") {
+    const orderFields = order && typeof order === "object" ? order : null;
+    const identifies = (o) => ["OrderNumber", "orderNumber", "OrderNumberDisplay", "Code", "code", "Symbol", "symbol"].some((k) => o[k] !== void 0 && o[k] !== null && o[k] !== "");
+    if (!orderFields || !identifies(orderFields)) {
       throw new ApiError("NOT_FOUND", `No order found with number ${id}`, {
-        context: { uid: caller.tenant.uid, mode: caller.mode, id }
+        context: {
+          uid: caller.tenant.uid,
+          mode: caller.mode,
+          id,
+          // Field NAMES only, never values: enough to tell an empty body from
+          // a shape we are reading at the wrong level, without logging an
+          // order's contents.
+          upstreamKeys: orderFields ? Object.keys(orderFields).slice(0, 40) : null
+        }
       });
     }
     assertAllowed(
